@@ -3247,9 +3247,216 @@ Swift 的默认访问级别是 `internal`，其定义就是"模块内可见"。�
 
 → [Swift中import详解](articles/ios-basics/Swift中import详解.md)
 
-#### OC 与 Swift 对比
+</details>
+
+<details>
+<summary><b>Q: Swift 宏解决的核心问题是什么？为什么说它是 Swift 元编程能力的一次补齐？</b></summary>
+
+Swift 宏解决的是**编译期代码生成**问题：让开发者可以在源码层面声明一段"会生成 Swift 代码的代码"，由编译器在类型检查前展开成真正的 Swift 源码，再继续走正常的类型检查、SIL 生成和优化流程。
+
+在 Swift 宏出现之前，Swift 虽然已经有不少元编程工具，但它们各自都有明显边界：
+
+- `@propertyWrapper` 只能包住属性，适合给单个属性增加读写行为，比如 `@State`、`@Published`，但它不能给类型生成新方法、不能让类型自动遵循协议，也不能批量改写其他成员。
+- `@resultBuilder` 主要用于把闭包里的表达式收集成 DSL，例如 SwiftUI 的 `ViewBuilder`，但它只作用在闭包内部，无法改造一个类型声明。
+- `Mirror` 和 KeyPath 属于运行时反射或半反射能力，性能、类型安全和可维护性都不适合大量生成样板代码。
+- `Codable` 这类自动合成能力以前属于编译器魔法，只有 Swift 编译器内部能实现，普通开发者无法写出同等能力。
+- Sourcery、SwiftGen 这类工具虽然能生成代码，但它们在编译器之外运行，往往只能做文本级处理，缺少 Swift 语法树上下文，和 IDE、增量编译、诊断系统结合也不够自然。
+
+Swift 宏的价值就在于：它把"编译器才能做的源码变换"开放给了开发者，同时仍然保留 Swift 的强类型、作用域、诊断和 IDE 展开体验。它不是运行时反射，也不是字符串模板，而是**基于 SwiftSyntax 的语法树变换**。
+
+→ [Swift 宏](articles/ios-basics/Swift宏.md)
 
 </details>
+
+<details>
+<summary><b>Q: Swift 宏和 Objective-C 的 `#define` 有什么本质区别？</b></summary>
+
+两者都叫"宏"，但本质完全不同。
+
+Objective-C 的 `#define` 是 C 预处理器能力，本质是**纯文本替换**。它发生在编译器真正理解代码之前，输入和输出都是 token 或字符串片段。预处理器并不知道 Swift/Objective-C 类型系统，不理解作用域，也不关心替换后的代码有没有副作用。
+
+Swift 宏发生在 Swift 编译流程内部，源码先被解析成语法结构，编译器遇到宏调用后，把相关语法节点交给宏插件，宏插件返回新的 Swift 语法片段，再由编译器继续做类型检查。因此 Swift 宏的输入输出是**语法树到语法树**，不是字符串到字符串。
+
+几个关键差异：
+
+- **执行阶段不同**：`#define` 是预处理阶段；Swift 宏是在编译中、类型检查前展开。
+- **操作对象不同**：`#define` 操作文本；Swift 宏操作 SwiftSyntax 语法节点。
+- **类型安全不同**：`#define` 替换时完全不知道类型；Swift 宏的声明签名会参与 Swift 类型检查，展开结果也必须是合法 Swift 代码。
+- **卫生性不同**：`#define` 没有卫生性，容易变量名冲突、重复求值；Swift 宏有部分卫生机制，可以通过 `context.makeUniqueName` 生成唯一名字，并要求附加宏通过 `names:` 声明生成的外部名字。
+- **调试体验不同**：`#define` 展开结果对 IDE 和调试器不友好；Swift 宏可以通过 Xcode 的 `Expand Macro` 查看展开后的代码，也可以用诊断系统定位错误。
+- **运行模型不同**：`#define` 属于预处理器；Swift 第三方宏以独立编译器插件进程运行，通过 JSON-RPC 与 `swiftc` 通信。
+
+→ [Swift 宏](articles/ios-basics/Swift宏.md)
+
+</details>
+
+<details>
+<summary><b>Q: Swift 宏分为哪两大类？附加宏有哪些常见 role？</b></summary>
+
+Swift 宏从语法形式上主要分为两类：**独立宏（Freestanding Macro）**和**附加宏（Attached Macro）**。
+
+独立宏以 `#` 开头，不依附在某个已有声明上。它又可以分为表达式宏和声明宏：
+
+- 表达式宏用于生成一个表达式，例如 `#stringify(1 + 2)` 可以展开成 `(1 + 2, "1 + 2")`。
+- 声明宏用于生成声明，例如 SwiftUI 的 `#Preview` 可以展开成预览所需的类型声明。
+
+附加宏以 `@` 开头，附着在一个已有声明上，根据 role 决定它能生成或改写什么：
+
+- `peer`：在被标注声明的同级位置生成新声明。比如给 completionHandler 风格方法生成一个 `async` 重载。
+- `member`：给类型内部新增成员。比如 `@Observable` 生成 `_$observationRegistrar`、`access`、`withMutation` 等辅助成员。
+- `accessor`：给属性生成访问器。比如 `@ObservationTracked` 改写属性的 getter/setter，用于依赖收集和变更通知。
+- `memberAttribute`：给类型里的成员批量添加属性。比如 `@Observable` 给存储属性加 `@ObservationTracked`。
+- `extension`：生成扩展，通常用于让类型自动遵循协议。Swift 5.10 之后，协议遵循相关能力合并到 `extension` role。
+- `body`：生成或替换函数体。Swift Testing 的 `@Test`、追踪日志类宏都可能使用这类能力。
+- `preamble`：在函数体开头插入代码，适合做轻量日志、埋点、权限检查等前置逻辑。
+
+一个宏可以同时拥有多个 role。`@Observable` 就是典型例子：它不是一个单一动作，而是同时使用 `member`、`memberAttribute`、`extension` 等能力，把普通 class 改造成可观察对象。
+
+→ [Swift 宏](articles/ios-basics/Swift宏.md)
+
+</details>
+
+<details>
+<summary><b>Q: Swift 宏的执行流程是什么？为什么宏不能直接拿到完整类型信息？</b></summary>
+
+Swift 宏的大致执行流程是：
+
+1. 编译器读取源文件，把源码解析成 Swift 语法结构。
+2. 编译器在类型检查前遇到宏调用，例如 `#stringify` 或 `@Observable`。
+3. `swiftc` 启动或复用对应的宏插件进程。
+4. 编译器通过 JSON-RPC 把宏调用节点、被标注声明节点等语法信息发送给插件。
+5. 宏插件使用 SwiftSyntax 分析输入语法，构造新的 `ExprSyntax`、`DeclSyntax` 等结果。
+6. 插件把展开后的 Swift 代码片段返回给编译器。
+7. 编译器把结果拼回源码对应位置，再继续类型检查、生成 SIL、优化和产物。
+
+这里最重要的点是：**宏在类型检查前展开**。因此宏实现里看到的是语法，不是已经解析完成的类型语义。
+
+例如宏可以看到某个属性写成：
+
+```swift
+var name: String
+var createdAt: Date
+var items: [Item]
+```
+
+但它拿到的主要是 `VariableDeclSyntax`、`TypeSyntax` 这类语法节点。它知道源码里写了 `String`、`Date`、`[Item]` 这些字面语法，但不能像编译器类型检查器那样可靠判断：
+
+- `Item` 到底是哪一个模块里的类型；
+- `T` 最终会被推导成什么具体类型；
+- 某个类型是否真的遵循 `Codable`、`Sendable` 或自定义协议；
+- 某个表达式重载解析后会调用哪个函数。
+
+所以，宏适合基于**声明形状**生成代码，比如"这个 struct 有哪些属性"、"这个函数最后一个参数是不是叫 completion"、"这个属性有没有显式类型标注"。但它不适合做复杂的类型系统推理，例如"如果属性类型遵循某协议就生成 A，否则生成 B"。
+
+工程上常见做法是：宏负责生成样板代码，真正依赖类型系统的行为交给泛型约束、协议扩展、运行时值或编译器后续类型检查处理。换句话说，**宏负责把代码写出来，类型系统负责证明这些代码是否合法。**
+
+→ [Swift 宏](articles/ios-basics/Swift宏.md)
+
+</details>
+
+<details>
+<summary><b>Q: 为什么第三方宏要跑在独立进程里？这对工程有什么影响？</b></summary>
+
+第三方宏不是直接嵌在 `swiftc` 进程里运行，而是以独立的编译器插件进程运行。这样设计主要有三个原因。
+
+第一是安全。宏本质上是编译期可执行代码，第三方宏包完全可以包含任意 Swift 逻辑。如果直接运行在编译器进程里，风险非常大。独立进程配合沙盒机制，可以限制宏插件的文件、网络等能力。Xcode 首次使用第三方宏时出现 `Trust & Enable`，就是在提醒开发者：你正在允许这个包在编译期执行代码。
+
+第二是崩溃隔离。宏作者写错代码、触发崩溃、死循环，都不应该把整个 `swiftc` 进程直接带崩。独立进程可以把故障限制在插件侧，编译器可以给出更明确的失败信息。
+
+第三是演进和复用。宏插件可以作为 Swift Package 的一个 `.macro` target 独立编译和分发，业务 target 只依赖暴露宏声明的普通 library target，不需要直接接触 SwiftSyntax 细节。
+
+但这个模型也带来工程代价：
+
+- 编译器需要启动插件进程，并通过 JSON-RPC 通信，宏用得多会增加编译耗时。
+- 第三方宏通常依赖 `swift-syntax`，而 `swift-syntax` 主版本要和 Swift 编译器版本匹配，升级 Xcode 时容易牵一发动全身。
+- 企业 CI 上必须管理宏的信任和供应链安全，锁定 `Package.resolved`，谨慎使用 `--skip-macro-validation`。
+- 宏插件本身不进入 App 运行时产物，但它会影响编译期行为，因此 code review 不能只看业务代码，也要看宏实现。
+
+→ [Swift 宏](articles/ios-basics/Swift宏.md)
+
+</details>
+
+<details>
+<summary><b>Q: `@Observable` 大致做了什么？为什么说它体现了宏的组合能力？</b></summary>
+
+`@Observable` 是理解 Swift 宏非常好的系统案例。开发者只写：
+
+```swift
+@Observable
+class UserViewModel {
+    var name: String = ""
+    var age: Int = 0
+}
+```
+
+宏展开后，类会被改造成一个可被 Observation 框架追踪的对象。简化来看，它做了几类事情。
+
+第一，生成观察所需的隐藏成员。比如添加 `_$observationRegistrar`，以及 `access(keyPath:)`、`withMutation(keyPath:_:)` 这类辅助方法，用于记录读取和包裹写入。
+
+第二，给存储属性加追踪能力。`@Observable` 会通过 `memberAttribute` 给属性加上类似 `@ObservationTracked` 的标注，而 `@ObservationTracked` 本身又是 accessor 宏，会把普通存储属性改写成带 getter/setter 的形式。
+
+第三，让类型遵循框架协议。宏会生成扩展，让类型遵循 `Observable`，使它能进入 SwiftUI/Observation 的依赖追踪体系。
+
+简化展开类似：
+
+```swift
+class UserViewModel {
+    @ObservationIgnored
+    private let _$observationRegistrar = ObservationRegistrar()
+
+    @ObservationTracked
+    var name: String = "" {
+        get {
+            access(keyPath: \.name)
+            return _name
+        }
+        set {
+            withMutation(keyPath: \.name) {
+                _name = newValue
+            }
+        }
+    }
+
+    private var _name: String
+}
+
+extension UserViewModel: Observable {}
+```
+
+这个例子体现了宏的组合能力：`@Observable` 不是简单生成一段代码，而是同时使用了 `member`、`memberAttribute`、`extension` 等 role，并配合另一个 accessor 宏改写属性访问。它把过去可能依赖 runtime、KVO、属性包装器和手写样板代码的机制，迁移到了编译期生成的强类型 Swift 代码。
+
+→ [Swift 宏](articles/ios-basics/Swift宏.md)
+
+</details>
+
+<details>
+<summary><b>Q: 使用 Swift 宏会带来哪些工程风险？什么时候不应该写宏？</b></summary>
+
+Swift 宏能力很强，但不应该把它当成普通函数、协议或泛型的替代品。主要风险有四类。
+
+第一是编译性能。第三方宏需要编译宏插件、启动插件进程、和编译器通信，还要解析和生成 SwiftSyntax。少量宏问题不大，但如果在大型项目里大量使用复杂宏，clean build 和增量编译都会受到影响。
+
+第二是版本耦合。`swift-syntax` 的版本必须和 Swift 编译器版本匹配。Xcode 升级后，宏包依赖的 `swift-syntax` 如果还停留在旧主版本，可能直接编译失败。团队需要把 Xcode、Swift tools version、swift-syntax、宏库版本一起管理。
+
+第三是可读性和调试成本。宏会让源文件中"看见的代码"少于"实际参与编译的代码"。如果宏生成很多复杂逻辑，后续排查问题时必须频繁查看展开结果。宏 API 设计不好时，调用端会显得简洁，维护端却非常痛苦。
+
+第四是安全与供应链风险。宏是编译期执行代码，第三方宏包本身需要被信任。企业项目里要锁定依赖版本，对宏实现做 code review，避免随意跳过宏校验。
+
+不适合写宏的场景包括：
+
+- 普通函数、泛型、协议扩展就能清楚表达的逻辑。
+- 只是为了少写几行代码，但会显著降低可读性的场景。
+- 需要大量类型语义推理的场景，例如依赖"某个泛型实参最终是否遵循某协议"来决定生成不同代码。
+- 生成代码过于复杂，且调用方很难通过 `Expand Macro` 理解实际行为的场景。
+- 性能敏感的大型工程中，高频、复杂、无法明确 `names:` 的宏。
+
+适合写宏的场景通常有共同特征：**样板代码重复、生成规则稳定、输入可以从语法结构判断、展开结果容易解释，并且生成代码能显著改善调用端 API。** 例如模型代码、测试断言、依赖注入样板、Mock/Spy 生成、预览声明、属性访问追踪等。
+
+→ [Swift 宏](articles/ios-basics/Swift宏.md)
+
+</details>
+
+#### OC 与 Swift 对比
 
 <details>
 <summary><b>Q: Objective-C与Swift有什么主要区别？</b></summary>
