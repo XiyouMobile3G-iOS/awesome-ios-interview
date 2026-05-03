@@ -466,16 +466,3 @@ with open('oom_limits.csv', 'w', newline='') as f:
 | `rpages × pageSize` | `MXCrashDiagnostic.virtualMemoryRegionInfo`（只在部分崩溃里有） |
 
 **实战建议**：线上采集 `MXAppExitMetric` 拿 OOM 计数 + 前后台分布；研发阶段用 JetsamEvent 拉真机拆阈值；客诉阶段让用户导出 JetsamEvent + App 自己的 Memory Dump 交叉分析。
-
----
-
-## 13. 参考资料
-
-- Apple Developer：*[Identifying high-memory use with jetsam event reports](https://developer.apple.com/documentation/xcode/identifying-high-memory-use-with-jetsam-event-reports)*
-- Apple Developer：*[Reducing your app's memory use](https://developer.apple.com/documentation/xcode/reducing-your-app-s-memory-use)*
-- WWDC 2020 *[Proactively avoid hangs](https://developer.apple.com/videos/play/wwdc2020/10078/)*、WWDC 2022 *[Track down hangs with Xcode and on-device detection](https://developer.apple.com/videos/play/wwdc2022/10082/)*
-- WWDC 2020 *[What's new in MetricKit](https://developer.apple.com/videos/play/wwdc2020/10081/)*、WWDC 2021 *[Diagnose performance issues with the Xcode Organizer](https://developer.apple.com/videos/play/wwdc2021/10211/)*
-- XNU 开源代码：*[osfmk/kern/kern_memorystatus.c](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/kern_memorystatus.c)*（Jetsam 核心实现，字段语义的权威来源）
-- Facebook Engineering：*[Reducing FOOMs in the Facebook iOS app](https://engineering.fb.com/2015/08/24/ios/reducing-fooms-in-the-facebook-ios-app/)*
-- 字节跳动技术团队：*MemoryGraph 线上化方案*、*OOM 归因与内存 Dump 实践*
-- 抖音 / 微信阅读团队关于后台 OOM、WebKit coalition 的公开分享

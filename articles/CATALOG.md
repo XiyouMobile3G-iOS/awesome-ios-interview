@@ -2,40 +2,40 @@
 
 ## iOS基础
 
-| 文章                                                                 | 描述                      |     |
-| ------------------------------------------------------------------ | ----------------------- | --- |
-| [App启动流程](ios-basics/App启动流程.md)                                   | 详解iOS应用的启动过程            |     |
-| [Objective-C中import详解](ios-basics/Objective-C中import详解.md)         | Objective-C中import的源码解析 |     |
-| [Swift中import详解](ios-basics/Swift中import详解.md)                     | Swift中import的源码详解       |     |
-| [iOS中的内存管理](ios-basics/iOS中的内存管理.md)                               | iOS内存管理机制详解             |     |
-| [+load与+initialize的区别](ios-basics/load与initialize的区别.md)           | +load和+initialize方法对比   |     |
-| [Mach-O的链接、装载与库](ios-basics/Mach-O的链接、装载与库.md)                     | Mach-O文件格式及相关概念         |     |
-| [mmap详解](ios-basics/mmap详解.md)                                     | 内存映射机制详解                |     |
-| [Objective-C与Swift区别](ios-basics/Objective-C与Swift区别.md)           | OC与Swift语言特性对比          |     |
-| [值类型和引用类型的区别](ios-basics/值类型和引用类型的区别.md)                           | 值类型与引用类型对比分析            |     |
-| [Objective-C底层原理-NSObject](ios-basics/Objective-C底层原理-NSObject.md) | NSObject底层实现原理          |     |
-| [Swift底层原理-结构体、类和协议](ios-basics/Swift底层原理-结构体、类和协议.md)             | Swift结构体、类和协议的底层实现      |     |
-| [runloop](ios-basics/runloop.md)                                   | RunLoop运行循环机制           |     |
-| [runtime](ios-basics/runtime.md)                                   | Objective-C运行时机制        |     |
+| 文章                                                                 | 描述                      |
+| ------------------------------------------------------------------ | ----------------------- |
+| [App启动流程](ios-basics/App启动流程.md)                                   | 详解iOS应用的启动过程            |
+| [Objective-C中import详解](ios-basics/Objective-C中import详解.md)         | Objective-C中import的源码解析 |
+| [Swift中import详解](ios-basics/Swift中import详解.md)                     | Swift中import的源码详解       |
+| [iOS中的内存管理](ios-basics/iOS中的内存管理.md)                               | iOS内存管理机制详解             |
+| [+load与+initialize的区别](ios-basics/load与initialize的区别.md)           | +load和+initialize方法对比   |
+| [Mach-O的链接、装载与库](ios-basics/Mach-O的链接、装载与库.md)                     | Mach-O文件格式及相关概念         |
+| [mmap详解](ios-basics/mmap详解.md)                                     | 内存映射机制详解                |
+| [Objective-C与Swift区别](ios-basics/Objective-C与Swift区别.md)           | OC与Swift语言特性对比          |
+| [值类型和引用类型的区别](ios-basics/值类型和引用类型的区别.md)                           | 值类型与引用类型对比分析            |
+| [Objective-C底层原理-NSObject](ios-basics/Objective-C底层原理-NSObject.md) | NSObject底层实现原理          |
+| [Swift底层原理-结构体、类和协议](ios-basics/Swift底层原理-结构体、类和协议.md)             | Swift结构体、类和协议的底层实现      |
+| [runloop](ios-basics/runloop.md)                                   | RunLoop运行循环机制           |
+| [runtime](ios-basics/runtime.md)                                   | Objective-C运行时机制        |
 | [SIL](ios-basics/SIL.md)                                           | Swift中间语言详解             |
-| [iOS编译原理](ios-basics/iOS编译原理.md)                                   | LLVM/Clang架构与OC/Swift编译流程详解 |     |
-| [Swift二进制兼容性](ios-basics/Swift二进制兼容性.md)                           | Swift ABI稳定性详解          |     |
-| [Timer的注意事项](ios-basics/Timer的注意事项.md)                             | Timer使用中的常见问题           |     |
-| [响应者链](ios-basics/响应者链.md)                                         | iOS事件响应链机制              |     |
-| [多线程](ios-basics/多线程.md)                                           | iOS多线程编程详解              |     |
-| [布局方法详解](ios-basics/布局方法详解.md)                                     | iOS布局系统详解               |     |
-| [生命周期](ios-basics/生命周期.md)                                         | App和ViewController生命周期  |     |
-| [类型擦除](ios-basics/类型擦除.md)                                         | Swift类型擦除技术详解           |     |
-| [weak详解](ios-basics/weak详解.md)                                     | weak引用的实现原理与使用          |     |
-| [KVC底层原理](ios-basics/KVC底层原理.md) | KVC键值编码的底层实现原理 |     |
-| [KVO底层原理](ios-basics/KVO底层原理.md) | KVO键值观察的底层实现原理 |     |
-| [Block底层原理](ios-basics/Block底层原理.md) | Block的底层结构、三种类型、__block原理与循环引用 |     |
-| [iOS反射](ios-basics/iOS反射.md) | OC Runtime反射与Swift Mirror内省机制 |     |
-| [iOS中的数据库](ios-basics/iOS中的数据库.md) | iOS数据持久化与数据库方案全景解析 |     |
-| [static关键字详解](ios-basics/static关键字详解.md) | OC/Swift中static的用法与底层原理 |     |
-| [计算机网络](ios-basics/计算机网络.md) | TCP/IP、HTTP/HTTPS、DNS与iOS网络编程 |     |
-| [Swift宏](ios-basics/Swift宏.md) | Swift 5.9+宏系统原理、实现、系统与社区实践 |     |
-| [Codable底层原理](ios-basics/Codable底层原理.md) | 基于Swift源码剖析Codable协议、编译器合成与JSONEncoder实现 |     |
+| [iOS编译原理](ios-basics/iOS编译原理.md)                                   | LLVM/Clang架构与OC/Swift编译流程详解 |
+| [Swift二进制兼容性](ios-basics/Swift二进制兼容性.md)                           | Swift ABI稳定性详解          |
+| [Timer的注意事项](ios-basics/Timer的注意事项.md)                             | Timer使用中的常见问题           |
+| [响应者链](ios-basics/响应者链.md)                                         | iOS事件响应链机制              |
+| [多线程](ios-basics/多线程.md)                                           | iOS多线程编程详解              |
+| [布局方法详解](ios-basics/布局方法详解.md)                                     | iOS布局系统详解               |
+| [生命周期](ios-basics/生命周期.md)                                         | App和ViewController生命周期  |
+| [类型擦除](ios-basics/类型擦除.md)                                         | Swift类型擦除技术详解           |
+| [weak详解](ios-basics/weak详解.md)                                     | weak引用的实现原理与使用          |
+| [KVC底层原理](ios-basics/KVC底层原理.md) | KVC键值编码的底层实现原理 |
+| [KVO底层原理](ios-basics/KVO底层原理.md) | KVO键值观察的底层实现原理 |
+| [Block底层原理](ios-basics/Block底层原理.md) | Block的底层结构、三种类型、__block原理与循环引用 |
+| [iOS反射](ios-basics/iOS反射.md) | OC Runtime反射与Swift Mirror内省机制 |
+| [iOS中的数据库](ios-basics/iOS中的数据库.md) | iOS数据持久化与数据库方案全景解析 |
+| [static关键字详解](ios-basics/static关键字详解.md) | OC/Swift中static的用法与底层原理 |
+| [计算机网络](ios-basics/计算机网络.md) | TCP/IP、HTTP/HTTPS、DNS与iOS网络编程 |
+| [Swift宏](ios-basics/Swift宏.md) | Swift 5.9+宏系统原理、实现、系统与社区实践 |
+| [Codable底层原理](ios-basics/Codable底层原理.md) | 基于Swift源码剖析Codable协议、编译器合成与JSONEncoder实现 |
 
 ---
 
@@ -88,6 +88,7 @@
 | [崩溃-治理](ios-advanced/崩溃/崩溃-治理.md) | 崩溃治理策略与实践 |
 | [崩溃日志解读](ios-advanced/崩溃/崩溃日志解读.md) | `.ips` 双段 JSON、Exception Type 与 Termination Namespace、寄存器与符号化实战 |
 | [JetsamEvent日志解读](ios-advanced/崩溃/JetsamEvent日志解读.md) | JetsamEvent `.ips` 字段、`reason` 类型、机型阈值矩阵与解析脚本 |
+| [面试题](ios-advanced/崩溃/面试题.md) | 25道崩溃高频面试题，涵盖原理、符号化、采集、治理、OOM、日志解读六大方向 |
 
 ### 死锁治理
 

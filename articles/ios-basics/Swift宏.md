@@ -2,8 +2,6 @@
 
 Swift 5.9（WWDC 2023）引入的**宏（Macro）**是近几年语言层最大的一次能力扩展。它让 Swift 第一次具备了**编译期代码生成**的官方机制——你可以在源码层面写一段"能生成代码的代码"，编译器会在类型检查前把它展开成真正的 Swift 源码，再走正常的编译流程。SwiftUI 的 `#Preview`、Observation 框架的 `@Observable`、SwiftData 的 `@Model`、Swift Testing 的 `@Test` / `#expect`、FoundationModels 的 `@Generable` / `@Tool`，全都是宏。
 
-本文从动机讲到架构，再到一个可跑的完整实现，最后覆盖常见系统宏、社区宏和工程陷阱，目标是让你读完后既能看懂所有 `@某某` 背后发生了什么，也能自己动手写一个。
-
 ## 一、为什么要有宏
 
 ### 1.1 Swift 之前能做什么，又差在哪

@@ -2934,6 +2934,76 @@ ObjectAssociationMap: { key → ObjcAssociation(policy, value) }
 
 </details>
 
+<details>
+<summary><b>Q: iOS 中有哪些反射机制？OC 和 Swift 的反射有什么区别？</b></summary>
+
+iOS 中有两套反射机制：
+
+**Objective-C Runtime 反射**：提供完整的动态反射能力。通过 Runtime API 可以在运行时获取类的属性列表、方法列表、成员变量列表、协议列表等元数据，还可以动态创建类、添加方法、修改方法实现（Method Swizzling）、通过字符串创建对象（`NSClassFromString`）等。元数据存储在类对象的 `class_rw_t` / `class_ro_t` 结构中。只支持 ObjC 类（继承自 NSObject 的对象）。
+
+**Swift Mirror 反射**：提供有限的只读内省能力。通过 `Mirror(reflecting:)` 可以在运行时获取任意 Swift 值的类型名称、存储属性名和值、displayStyle（struct/class/enum/optional 等），还可以通过 `superclassMirror` 遍历类的继承链。底层依赖编译器在 Mach-O 中生成的元数据（`__swift5_fieldmd`、`__swift5_reflstr` 等）。支持所有 Swift 类型（struct、class、enum、tuple），但不能修改属性、不能获取方法列表、不能动态调用方法。
+
+核心区别：OC 反射追求最大灵活性（可读可写可改），Swift 反射追求编译时安全（只读内省）。对于继承自 `NSObject` 的 Swift 类，两套系统可以共存，但 OC Runtime 只能看到 `@objc` 标记的属性和方法。
+
+→ [iOS反射](articles/ios-basics/iOS反射.md)
+
+</details>
+
+<details>
+<summary><b>Q: Swift 的 Mirror 底层是怎么实现的？</b></summary>
+
+Mirror 的底层依赖 Swift 编译器在 Mach-O 中生成的反射元数据。主要涉及以下几个 Section：
+
+- `__swift5_fieldmd`（Field Descriptor）：存储每个类型的字段描述信息，包括字段数量和每个字段的名称引用、类型引用
+- `__swift5_reflstr`（Reflection Strings）：存储字段名称的字符串常量
+- `__swift5_types`（Type Descriptor）：存储类型的描述信息，包括类型名称、泛型参数、字段数量、Field Descriptor 的相对偏移
+- `__swift5_typeref`（Type References）：存储字段类型的 Mangled Name 引用
+
+创建 `Mirror(reflecting: value)` 时，Swift Runtime 首先通过值的类型元数据指针找到 Type Descriptor，再通过其中的 Field Descriptor 引用定位到字段描述信息。然后逐一读取字段名称（从 `__swift5_reflstr`）和字段偏移量（从元数据中的 Field Offset Vector），最终从值的内存地址加上偏移量处读取字段值，构建出 `Mirror.Child` 数组。
+
+如果值的类型遵循了 `CustomReflectable` 协议，Mirror 会优先调用 `customMirror` 属性获取自定义的反射结果，跳过默认的元数据反射流程。
+
+→ [iOS反射](articles/ios-basics/iOS反射.md)
+
+</details>
+
+<details>
+<summary><b>Q: OC 的字典转模型是怎么通过反射实现的？</b></summary>
+
+核心思路是利用 Runtime API 获取模型类的所有属性（或成员变量），然后遍历这些属性，从字典中取出对应 key 的值，通过 KVC 赋值给模型对象。
+
+基本实现步骤：
+1. 调用 `class_copyPropertyList`（或 `class_copyIvarList`）获取类的属性列表
+2. 遍历属性列表，通过 `property_getName` 获取属性名
+3. 以属性名为 key 从字典中取值
+4. 通过 `setValue:forKey:`（KVC）将值设置到模型对象上
+5. 调用 `free` 释放属性列表的内存
+
+实际的 JSON 转模型框架（如 MJExtension、YYModel）还需要额外处理：类型转换（如字符串转数字）、嵌套模型递归转换、数组中的模型类型识别（通过约定的类方法返回数组元素类型）、属性名与 JSON key 的映射关系、`NSNull` 处理等。YYModel 为了追求性能，还使用了 `objc_msgSend` 直接调用 setter 而非 KVC，并且缓存了属性的类型信息避免重复解析。
+
+→ [iOS反射](articles/ios-basics/iOS反射.md)
+
+</details>
+
+<details>
+<summary><b>Q: NSClassFromString 在什么场景下使用？有什么注意事项？</b></summary>
+
+`NSClassFromString` 将字符串转换为 Class 对象，常用于以下场景：
+
+1. **路由系统**：组件化架构中，模块间通过 URL → 类名字符串 → `NSClassFromString` → 创建对象的方式实现解耦
+2. **动态加载**：根据配置或服务端下发的类名，动态创建不同的视图控制器或策略对象
+3. **避免硬依赖**：当需要使用某个类但不想直接 import 它的头文件时（如可选依赖的 SDK）
+
+注意事项：
+
+- 如果类不存在，返回 `nil`，不会崩溃，因此必须做非空判断
+- **Swift 类的命名空间**：Swift 类在 Runtime 中的名称包含模块名前缀（如 `MyApp.MyViewController`），使用 `NSClassFromString` 时必须传入完整的 `"模块名.类名"` 格式，否则返回 nil。如果 Swift 类标记了 `@objc(CustomName)`，则使用括号中的名称
+- 不要在性能敏感的路径中频繁调用，因为涉及全局类表的哈希查找
+
+→ [iOS反射](articles/ios-basics/iOS反射.md)
+
+</details>
+
 ### 语言特性
 
 #### Objective-C
@@ -3070,9 +3140,46 @@ HEADER_SEARCH_PATHS = $(inherited) "${PODS_ROOT}/Headers/Public" "${PODS_ROOT}/H
 
 → [Objective-C中import详解](articles/ios-basics/Objective-C中import详解.md)
 
-#### Swift
+</details>
+
+<details>
+<summary><b>Q: static 局部变量和普通局部变量有什么区别？</b></summary>
+
+
+| 对比项 | 普通局部变量 | static 局部变量 |
+|--------|------------|----------------|
+| 存储位置 | 栈 | 数据段（.data/.bss） |
+| 初始化次数 | 每次函数调用 | 仅一次（程序启动时） |
+| 生命周期 | 函数调用期间 | 整个进程 |
+| 默认初始值 | 不确定（垃圾值） | 0 / nil / NULL |
+| 作用域 | 函数内 | 函数内（不变） |
+
+在 Block 捕获场景下：
+
+| 对比项 | 普通局部变量 | static 局部变量 |
+|--------|------------|----------------|
+| 捕获方式 | 值拷贝（const copy） | 指针捕获 |
+| Block 内可修改 | 不可以（需 `__block`） | 可以 |
+| 原因 | 值已拷贝到 Block 结构体 | 地址固定在数据段，直接通过指针访问 |
+
+→ [static关键字详解](articles/ios-basics/static关键字详解.md)
 
 </details>
+
+<details>
+<summary><b>Q: 不同 .m 文件中定义了同名的 static 全局变量会冲突吗？</b></summary>
+
+
+不会。核心原因在于 `static` 改变了变量的**链接属性（Linkage）**：
+
+- **不加 `static`**：全局变量默认具有 **external linkage**，符号被导出到全局符号表。如果两个 `.m` 文件定义了同名全局变量，链接器在合并所有 `.o` 文件时会发现重复符号，报 `duplicate symbol` 错误。
+- **加了 `static`**：链接属性变为 **internal linkage**，编译器将其标记为**本地符号（Local Symbol）**，不会导出到全局符号表。每个文件中的同名变量在符号表中是各自独立的条目，链接器不会尝试合并它们，在内存中也是各自独立的存储空间。
+
+→ [static关键字详解](articles/ios-basics/static关键字详解.md)
+
+</details>
+
+#### Swift
 
 <details>
 <summary><b>Q: 为什么同一 Target 下的 Swift 文件不需要 import？</b></summary>
@@ -3174,7 +3281,7 @@ WAL（Write-Ahead Logging）是SQLite的一种日志模式。与默认的回滚�
 <details>
 <summary><b>Q: 数据库索引为什么能加速查询？什么时候不该建索引？</b></summary>
 
-没有索引时，数据库只能从第一行开始逐行扫描直到最后一行（全表扫描，O(N)）。索引本质是一棵独立的B-Tree，将被索引列的值按顺序组织成树形结构。由于B-Tree每个节点可容纳数百个Key，树高度极低（百万级数据通常只有3~4层），查找任意值只需3~4次节点比较即可定位，时间复杂度O(log N)。例如100万行数据，全表扫描最坏需要100万次比较，B-Tree查找只需约20次。不该建索引的情况：低选择性的列（如`is_deleted`只有0和1，索引无法有效缩小范围）、数据量很小的表（全表扫描本身就很快）、写多读少的表（每次写入都要维护索引B-Tree）、频繁更新的列（每次UPDATE都触发索引重排）、以及查询条件中对列使用了函数的情况（如`WHERE LOWER(name) = 'test'`，索引存的是原始值无法命中）。
+没有索引时，数据库只能从第一行开始逐行扫描直到最后一行（全表扫描，O(N)）。索引本质是一棵独立的B-Tree，将被索引列的值按顺序组织成树形结构。由于B-Tree每个节点可容纳数百个Key，树高度极低（百万级数据通常只有3\~4层），查找任意值只需3\~4次节点比较即可定位，时间复杂度O(log N)。例如100万行数据，全表扫描最坏需要100万次比较，B-Tree查找只需约20次。不该建索引的情况：低选择性的列（如`is_deleted`只有0和1，索引无法有效缩小范围）、数据量很小的表（全表扫描本身就很快）、写多读少的表（每次写入都要维护索引B-Tree）、频繁更新的列（每次UPDATE都触发索引重排）、以及查询条件中对列使用了函数的情况（如`WHERE LOWER(name) = 'test'`，索引存的是原始值无法命中）。
 
 → [iOS中的数据库](articles/ios-basics/iOS中的数据库.md)
 
@@ -3195,6 +3302,462 @@ Realm使用mmap将数据文件映射到进程的虚拟地址空间。Realm对象
 UserDefaults每次写入都需要将整个plist字典重新序列化并写入磁盘，时间复杂度与总数据量成正比。MMKV基于mmap内存映射和protobuf序列化，使用增量追加写入策略——新数据直接追加到文件末尾，单次写入时间与写入数据量成正比，与总数据量无关。同时mmap写入由操作系统内核负责异步刷盘，即使进程崩溃也不会丢失数据。
 
 → [iOS中的数据库](articles/ios-basics/iOS中的数据库.md)
+
+</details>
+
+### 计算机网络
+
+<details>
+<summary><b>Q: OSI七层模型与TCP/IP四层模型的对应关系是什么？各层的作用？</b></summary>
+
+OSI七层模型从下到上依次为：物理层、数据链路层、网络层、传输层、会话层、表示层、应用层。TCP/IP四层模型将其简化为：网络接口层（对应物理层+数据链路层）、网络层、传输层、应用层（对应会话层+表示层+应用层）。
+
+各层核心作用：
+- **物理层**：比特流的物理传输，定义电气特性、传输介质（光纤、双绞线）
+- **数据链路层**：帧的封装与MAC寻址，负责相邻节点间的可靠传输（Ethernet、Wi-Fi）
+- **网络层**：路由选择与IP寻址，负责跨网络的端到端数据包传输（IP、ICMP、ARP）
+- **传输层**：端到端的可靠数据传输，提供进程级通信（TCP、UDP）
+- **应用层**：为应用程序提供网络服务（HTTP、DNS、FTP）
+
+→ [计算机网络](articles/ios-basics/计算机网络.md)
+
+</details>
+
+<details>
+<summary><b>Q: 数据从发送方到接收方经历了怎样的封装与解封装过程？</b></summary>
+
+以一次HTTP请求为例，发送方封装过程：
+
+1. **应用层**：构造HTTP请求报文（请求行 + 请求头 + 请求体），作为原始数据交给传输层
+2. **传输层**：在应用层数据前添加TCP首部（源端口、目的端口、序列号、确认号等），封装为TCP段（Segment）。如果数据超过MSS（通常1460字节），会进行分段
+3. **网络层**：在TCP段前添加IP首部（源IP、目的IP、TTL、协议类型等），封装为IP数据包（Packet）。如果超过MTU（通常1500字节），会进行分片
+4. **数据链路层**：在IP数据包前后添加帧头（源MAC、目的MAC、类型）和帧尾（FCS校验序列），封装为帧（Frame）
+5. **物理层**：将帧转换为比特流（电信号或电磁波）通过物理介质传输
+
+接收方执行完全相反的解封装过程：物理层还原为帧 → 数据链路层校验FCS并剥离帧头帧尾 → 网络层校验并剥离IP首部 → 传输层校验并剥离TCP首部、重组数据 → 应用层解析HTTP报文。
+
+这种分层机制的核心价值在于**各层独立演进**：应用层可以换协议（HTTP→gRPC），传输层可以换协议（TCP→UDP），只要接口契约不变，其他层不受影响。
+
+→ [计算机网络](articles/ios-basics/计算机网络.md)
+
+</details>
+
+<details>
+<summary><b>Q: TCP三次握手的过程是怎样的？为什么需要三次而不是两次？</b></summary>
+
+三次握手过程：
+1. **第一次**：客户端发送SYN报文（SYN=1, seq=x），进入SYN_SENT状态
+2. **第二次**：服务端收到SYN后，发送SYN+ACK报文（SYN=1, ACK=1, seq=y, ack=x+1），进入SYN_RCVD状态
+3. **第三次**：客户端收到SYN+ACK后，发送ACK报文（ACK=1, seq=x+1, ack=y+1），双方进入ESTABLISHED状态
+
+三次握手的目的是**同步双方的序列号和确认号，并交换TCP窗口大小信息**。
+
+为什么不是两次？假设客户端发送的一个SYN报文在网络中滞留，客户端超时后重发SYN并成功建立连接、传输数据、关闭连接。此后，滞留的SYN到达服务端，服务端误以为是新连接请求，返回SYN+ACK。如果只有两次握手，服务端就会直接进入ESTABLISHED状态，分配资源等待数据，但客户端并不会发送数据，造成**资源浪费**。三次握手中，客户端不会对这个过期的SYN+ACK进行确认，服务端收不到ACK就不会建立连接。
+
+→ [计算机网络](articles/ios-basics/计算机网络.md)
+
+</details>
+
+<details>
+<summary><b>Q: TCP四次挥手的过程是怎样的？为什么需要TIME_WAIT状态？</b></summary>
+
+四次挥手过程：
+1. **第一次**：客户端发送FIN报文，表示不再发送数据，进入FIN_WAIT_1
+2. **第二次**：服务端收到FIN，回复ACK，进入CLOSE_WAIT。此时服务端可能仍有数据要发送
+3. **第三次**：服务端数据发送完毕，发送FIN报文，进入LAST_ACK
+4. **第四次**：客户端收到FIN，回复ACK，进入TIME_WAIT状态，等待2MSL后关闭
+
+需要四次挥手的原因是TCP是**全双工**的，每个方向都需要单独关闭。客户端发送FIN只表示自己不发了，服务端可能还有数据要发，所以服务端的ACK和FIN分开发送。
+
+TIME_WAIT等待2MSL的原因：
+- **确保最后的ACK到达服务端**：如果ACK丢失，服务端会重发FIN，客户端需要在TIME_WAIT期间内能重新发送ACK
+- **让旧连接的报文在网络中消失**：防止旧连接中残留的报文干扰新连接（新连接可能复用相同的四元组）
+
+→ [计算机网络](articles/ios-basics/计算机网络.md)
+
+</details>
+
+<details>
+<summary><b>Q: TCP如何保证可靠传输？</b></summary>
+
+TCP通过多种机制保证可靠传输：
+
+1. **序列号与确认应答**：每个字节都有唯一的序列号，接收方通过ACK确认已接收到的数据。发送方如果在超时时间内未收到ACK，就会重传数据
+2. **滑动窗口**：实现流量控制。窗口大小由接收方通过TCP头部的窗口大小字段通告，发送方根据窗口大小控制发送速率，避免接收方缓冲区溢出
+3. **拥塞控制**：包含四个算法：
+   - **慢启动**：连接建立初期，cwnd从1个MSS开始，每收到一个ACK翻倍（指数增长）
+   - **拥塞避免**：cwnd达到ssthresh后，每个RTT增加1个MSS（线性增长）
+   - **快速重传**：收到3个重复ACK时，立即重传丢失的报文段，不用等待超时
+   - **快速恢复**：快速重传后，ssthresh=cwnd/2，cwnd=ssthresh+3，直接进入拥塞避免
+4. **校验和**：TCP首部包含校验和字段，用于检测传输过程中的数据错误
+
+→ [计算机网络](articles/ios-basics/计算机网络.md)
+
+</details>
+
+<details>
+<summary><b>Q: TCP与UDP的区别是什么？各自适用什么场景？</b></summary>
+
+| 特性 | TCP | UDP |
+|------|-----|-----|
+| 连接方式 | 面向连接 | 无连接 |
+| 可靠性 | 可靠（确认、重传、排序） | 不可靠 |
+| 传输方式 | 字节流 | 数据报 |
+| 首部大小 | 20-60字节 | 8字节 |
+| 流量控制 | 有（滑动窗口） | 无 |
+| 拥塞控制 | 有 | 无 |
+| 连接模式 | 一对一 | 一对一、一对多、多对多 |
+
+适用场景：
+- **TCP**：文件传输、网页浏览、邮件——需要可靠传输的场景
+- **UDP**：视频流、DNS查询、实时游戏——对实时性要求高、能容忍少量丢包的场景
+
+→ [计算机网络](articles/ios-basics/计算机网络.md)
+
+</details>
+
+<details>
+<summary><b>Q: GET与POST的区别是什么？</b></summary>
+
+| 对比项 | GET | POST |
+|--------|-----|------|
+| 参数位置 | URL的Query String中 | 请求体中 |
+| 参数长度 | 受URL长度限制（浏览器限制，非协议限制） | 无限制 |
+| 缓存 | 可被缓存 | 一般不被缓存 |
+| 幂等性 | 幂等 | 非幂等 |
+| 安全性 | 只读，不修改资源 | 可能修改资源 |
+| TCP数据包 | 通常1个（header和data一起发送） | 可能2个（先发header，收到100 Continue后再发data） |
+
+**幂等性**是指同一请求执行多次，效果与执行一次相同。GET是幂等的（多次查询结果一致），POST是非幂等的（多次创建会产生多个资源）。
+
+→ [计算机网络](articles/ios-basics/计算机网络.md)
+
+</details>
+
+<details>
+<summary><b>Q: HTTP/1.1、HTTP/2、HTTP/3的主要区别和演进是什么？</b></summary>
+
+**HTTP/1.1**：
+- 持久连接（Keep-Alive）：默认复用TCP连接
+- 管道化（Pipelining）：可连续发送多个请求，但响应必须按顺序返回，存在**队头阻塞**
+- 分块传输编码、Host头部支持虚拟主机
+
+**HTTP/2**：
+- **二进制分帧层**：将HTTP消息分割为更小的帧
+- **多路复用**：一个TCP连接上并行交错发送多个请求和响应，解决了HTTP层的队头阻塞
+- **头部压缩（HPACK）**：使用静态表、动态表和Huffman编码压缩请求头
+- **服务器推送**：服务端可主动推送资源
+- **流优先级**：客户端可指定请求优先级
+
+**HTTP/3**：
+- 基于QUIC协议（UDP之上），避免了TCP层的队头阻塞（TCP丢包会阻塞所有流）
+- 内置TLS 1.3，加密默认开启
+- **0-RTT连接建立**：已知服务器可在第一个数据包中携带应用数据
+- **连接迁移**：使用Connection ID而非四元组标识连接，网络切换无需重新建立连接
+
+→ [计算机网络](articles/ios-basics/计算机网络.md)
+
+</details>
+
+<details>
+<summary><b>Q: HTTP断点续传的原理是什么？</b></summary>
+
+断点续传基于HTTP/1.1的**范围请求（Range Request）**实现。
+
+核心头部：
+- `Range: bytes=1024-2047`：请求指定字节范围
+- `Content-Range: bytes 1024-2047/10240`：返回内容在整个资源中的位置
+- `Accept-Ranges: bytes`：服务端声明支持范围请求
+- `If-Range`：携带ETag或Last-Modified，条件性发起范围请求
+
+流程：
+1. 首次请求时，服务端返回 `Accept-Ranges: bytes` 和 `ETag`
+2. 下载中断后，客户端记录已下载字节数和ETag
+3. 恢复时发送 `Range: bytes=已下载-` 和 `If-Range: ETag值`
+4. 如果ETag匹配（资源未变），服务端返回 `206 Partial Content`，客户端从断点继续
+5. 如果ETag不匹配（资源已变），服务端返回 `200 OK`，客户端重新下载
+
+大文件分片上传同理：将文件切分为固定大小的分片，逐片上传，记录进度，中断后从未完成的分片继续，最后合并。
+
+→ [计算机网络](articles/ios-basics/计算机网络.md)
+
+</details>
+
+<details>
+<summary><b>Q: HTTPS与HTTP的区别是什么？</b></summary>
+
+**核心区别**：HTTP 是明文的应用层协议；HTTPS 本质上仍然是 HTTP，只是在 HTTP 与 TCP 之间增加了 TLS/SSL 安全层，即 **HTTPS = HTTP + TLS**。因此 HTTPS 传输的是加密后的 HTTP 报文。
+
+| 对比项 | HTTP | HTTPS |
+|--------|------|-------|
+| 安全性 | 明文传输，容易被窃听、篡改、伪装 | TLS 加密传输，提供加密、身份认证、完整性校验 |
+| 协议层次 | HTTP 直接运行在 TCP 之上 | HTTP 运行在 TLS 之上，TLS 再运行在 TCP 之上 |
+| 默认端口 | 80 | 443 |
+| 连接建立 | TCP 三次握手后即可发送 HTTP 报文 | TCP 三次握手后还要进行 TLS 握手 |
+| 性能开销 | 开销较低 | 多了 TLS 握手和加解密开销，但 TLS 1.3、会话恢复、硬件加速已显著降低影响 |
+| 证书要求 | 不需要证书 | 需要服务端证书，由 CA 信任链验证身份 |
+
+HTTPS 主要解决 HTTP 的三个安全问题：
+
+1. **机密性**：HTTP 请求头、请求体、响应内容都是明文；HTTPS 使用 AES、ChaCha20 等对称加密算法加密应用数据，即使被抓包也无法直接读取内容。
+2. **身份认证**：HTTP 无法确认对端是否是真正的服务器；HTTPS 通过服务端证书链验证域名、有效期、CA 签名和吊销状态，确认客户端访问的确实是目标站点。
+3. **完整性**：HTTP 报文可能被中间人篡改；HTTPS 使用哈希、MAC 或 AEAD 认证标签校验数据，篡改会在解密或校验时被发现。
+
+HTTPS 的一次请求流程可以概括为：
+
+1. **DNS 解析**：客户端先解析域名，得到服务器 IP。
+2. **TCP 三次握手**：建立可靠的 TCP 连接，这一步与 HTTP 相同。
+3. **TLS 握手**：在 TCP 连接之上建立安全通道，核心目标是完成**参数协商、身份认证、密钥交换**。以 TLS 1.3 的 ECDHE 握手为例：
+   - **ClientHello**：客户端发送支持的 TLS 版本、密码套件列表、客户端随机数（Client Random），以及 ECDHE 临时公钥等密钥交换参数。
+   - **ServerHello**：服务端从客户端支持的能力中选择 TLS 版本和密码套件，返回服务端随机数（Server Random）和服务端 ECDHE 临时公钥。
+   - **证书认证**：服务端发送证书链，客户端校验证书是否过期、域名是否匹配、CA 签名是否合法、证书是否被吊销，以确认服务端身份。
+   - **密钥生成**：客户端和服务端分别用“自己的 ECDHE 私钥 + 对方的 ECDHE 公钥”计算出相同的 Pre-Master Secret，再结合 Client Random、Server Random 派生出会话密钥。这个会话密钥不会在网络中直接传输。
+   - **Finished 校验**：双方用派生出的密钥校验握手消息摘要，确认握手过程未被篡改，并切换到加密通信。
+4. **加密传输 HTTP 数据**：握手完成后，后续 HTTP 请求和响应都使用会话密钥进行对称加密传输。
+
+→ [计算机网络](articles/ios-basics/计算机网络.md)
+
+</details>
+
+<details>
+<summary><b>Q: WebSocket的握手过程是怎样的？帧格式是怎样的？为什么客户端发送的帧必须掩码？</b></summary>
+
+WebSocket连接建立涉及三个层面：TCP连接 → TLS握手（wss场景）→ WebSocket握手。
+
+**WebSocket握手**（HTTP Upgrade）：
+1. 客户端发送HTTP GET请求，携带特殊头部：
+   - `Upgrade: websocket` / `Connection: Upgrade`：请求协议升级
+   - `Sec-WebSocket-Key`：16字节随机值的Base64编码
+   - `Sec-WebSocket-Version: 13`
+2. 服务端返回 `101 Switching Protocols`，携带 `Sec-WebSocket-Accept`
+3. `Sec-WebSocket-Accept` 的计算：SHA1(Sec-WebSocket-Key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11") 的Base64编码
+
+这个验证机制的目的不是安全性，而是：
+- 确认服务端确实理解WebSocket协议
+- 防止HTTP缓存代理将握手响应缓存并复放
+- 阻止非WebSocket客户端意外建立WebSocket连接
+
+**WebSocket与HTTP的关系**：WebSocket和HTTP是平级的应用层协议。WebSocket仅在握手阶段"借用"了HTTP（通过Upgrade机制），一旦连接建立（收到101），底层TCP连接就不再承载HTTP报文，改为承载WebSocket帧。两者共用80/443端口，这使得WebSocket可以穿透大多数防火墙和代理。
+
+**WebSocket帧格式**：采用紧凑的二进制格式，帧头仅2-14字节（HTTP头部通常几百字节到几KB）：
+
+关键字段：
+- **FIN**：1位，标记消息最后一帧
+- **Opcode**：4位，帧类型（0x1=文本, 0x2=二进制, 0x8=关闭, 0x9=Ping, 0xA=Pong）
+- **MASK**：1位，客户端→服务端必须为1
+- **Payload Length**：7位（可扩展至16位或64位）
+- **Masking Key**：4字节（MASK=1时存在）
+
+**客户端帧必须掩码的原因**：防止**缓存投毒攻击（Cache Poisoning）**。恶意网页中的JavaScript通过WebSocket向目标服务器发送精心构造的数据，如果中间存在不理解WebSocket协议的HTTP代理，代理可能将WebSocket帧误认为HTTP请求/响应并缓存。掩码使得每次发送的帧在比特层面都不同，让代理无法将其与HTTP流量混淆。掩码算法：`masked_payload[i] = original_payload[i] XOR masking_key[i % 4]`。这不是加密（Masking Key是明文传输的），纯粹是协议层面的安全防护。
+
+→ [计算机网络](articles/ios-basics/计算机网络.md)
+
+</details>
+
+<details>
+<summary><b>Q: SSE、WebSocket与Streamable HTTP的区别是什么？各自适用什么场景？</b></summary>
+
+这三者都可以用于实时通信或流式传输，但定位不同：
+
+| 对比项 | SSE | WebSocket | Streamable HTTP |
+|--------|-----|-----------|-----------------|
+| 核心定位 | 服务端单向推送 | 双向实时通信 | HTTP请求/响应 + 按需流式响应 |
+| 协议基础 | 标准HTTP | 独立协议，经HTTP Upgrade升级 | 标准HTTP，复杂场景可升级为SSE流 |
+| 通信方向 | 服务端 -> 客户端 | 客户端 <-> 服务端 | 客户端请求为主，服务端可流式返回 |
+| 连接模型 | 一个持久HTTP连接 | 一个持久TCP连接 | 简单请求可短连接，流式请求才保持连接 |
+| 数据格式 | 纯文本（UTF-8） | 文本和二进制 | 普通JSON或 `text/event-stream` |
+| 自动重连 | 内置支持（Last-Event-ID） | 需要业务自己实现 | 可按HTTP请求粒度恢复 |
+| 代理/负载均衡 | 友好，标准HTTP流量 | 可能需要额外配置 | 最友好，请求可独立路由 |
+| 典型场景 | AI流式输出、通知、实时日志 | 即时通讯、协同编辑、实时游戏 | MCP工具调用、Agent流式响应、按需流式API |
+
+**SSE** 适合“服务端持续推送，客户端只接收”的场景。它基于普通HTTP，浏览器原生支持 `EventSource`，并且自带断线重连和事件ID追踪，所以实现简单、代理友好。但它只能服务端到客户端单向传输，且只支持文本数据。
+
+**WebSocket** 适合“双方都要频繁发送消息”的场景。握手阶段通过HTTP Upgrade建立连接，之后就不再传输HTTP报文，而是传输WebSocket帧。它支持全双工通信和二进制数据，实时性强，但自动重连、心跳、鉴权续期、消息确认等通常需要业务自己实现。
+
+**Streamable HTTP** 可以理解为一种渐进式的HTTP流式传输设计，MCP协议用它替代旧的HTTP+SSE传输方案。核心思想是：**简单场景就是普通HTTP请求/响应，复杂场景再按需升级为SSE流式响应**。
+
+Streamable HTTP主要解决旧HTTP+SSE方案的几个问题：
+
+- **部署更简单**：旧方案通常要维护POST请求通道和SSE推送通道，Streamable HTTP可以只暴露一个HTTP端点。
+- **简单请求更轻量**：不需要为了一个普通请求先建立SSE长连接，可以直接返回JSON。
+- **负载均衡更友好**：请求可以独立路由，不强依赖长连接亲和性。
+- **恢复能力更自然**：每个请求都有明确边界，失败后可以按请求粒度重试或恢复。
+
+选择建议：
+- **只需要服务端单向推送**：优先选SSE，例如AI流式输出、通知、日志推送。
+- **需要双向高频实时交互**：选WebSocket，例如聊天、协同编辑、实时游戏。
+- **以HTTP请求/响应为主，部分请求需要流式返回**：选Streamable HTTP，例如MCP工具调用、Agent执行进度、流式模型输出。
+
+→ [计算机网络](articles/ios-basics/计算机网络.md)
+
+</details>
+
+<details>
+<summary><b>Q: DNS解析的完整流程是怎样的？</b></summary>
+
+当应用程序需要将域名解析为IP地址时：
+
+1. **本地缓存查找**：浏览器DNS缓存 → 操作系统DNS缓存（macOS/iOS使用mDNSResponder）→ hosts文件。任一层命中则直接返回
+2. **查询本地DNS服务器**（递归查询）：向LocalDNS发起递归查询请求，LocalDNS自身有缓存则返回
+3. **查询根DNS服务器**（迭代查询）：LocalDNS向根服务器查询，根服务器返回TLD服务器地址
+4. **查询TLD DNS服务器**：LocalDNS向.com TLD服务器查询，返回权威DNS服务器地址
+5. **查询权威DNS服务器**：LocalDNS向权威服务器查询，返回最终的IP地址
+6. **返回并缓存**：结果返回给应用程序，同时按TTL缓存
+
+递归查询 vs 迭代查询：
+- **递归查询**：客户端只发一次请求，DNS服务器负责追查到底（客户端→LocalDNS）
+- **迭代查询**：DNS服务器返回"下一步去找谁"（LocalDNS→根/TLD/权威）
+
+→ [计算机网络](articles/ios-basics/计算机网络.md)
+
+</details>
+
+<details>
+<summary><b>Q: 什么是DNS劫持？有哪些防御手段？</b></summary>
+
+DNS劫持是指攻击者篡改DNS解析过程，使域名被解析到错误的IP地址。
+
+常见劫持方式：
+- **LocalDNS劫持**：运营商篡改解析结果，插入广告或使用缓存服务器
+- **DNS欺骗**：攻击者监听DNS查询报文，抢先伪造响应（UDP无身份验证，先到先得）
+- **路由器DNS劫持**：入侵路由器修改DNS服务器设置
+- **hosts文件篡改**：恶意软件修改本地hosts文件
+- **DNS缓存投毒**：向LocalDNS注入伪造记录，影响所有用户
+
+防御手段：
+| 防御手段 | 原理 |
+|----------|------|
+| HTTPDNS | 通过HTTP/HTTPS获取DNS结果，绕过LocalDNS（iOS推荐） |
+| DoH（DNS over HTTPS） | DNS查询封装在HTTPS中，加密防篡改 |
+| DoT（DNS over TLS） | DNS查询封装在TLS中（端口853） |
+| DNSSEC | DNS记录数字签名，验证真实性 |
+| 证书校验 | HTTPS证书验证可在应用层发现域名与证书不匹配 |
+
+对于iOS开发，**HTTPDNS + 证书校验**是最实用的组合方案。
+
+→ [计算机网络](articles/ios-basics/计算机网络.md)
+
+</details>
+
+<details>
+<summary><b>Q: TCP Socket通信的完整流程是怎样的？</b></summary>
+
+Socket 是操作系统提供的网络通信 API，应用程序通过 Socket 间接使用 TCP/IP 协议栈。TCP Socket 使用 `SOCK_STREAM`，特点是**面向连接、可靠、有序、基于字节流**。一个 TCP Socket 连接通常可以用五元组标识：`(协议, 本地IP, 本地端口, 远端IP, 远端端口)`。
+
+**服务端流程**：
+
+1. **`socket()` 创建监听 Socket**：创建一个 TCP 套接字，典型参数是 `socket(AF_INET, SOCK_STREAM, 0)`。返回值是文件描述符，后续的监听、收发、关闭都围绕这个 fd 操作。
+2. **`bind()` 绑定地址和端口**：服务端需要绑定固定端口，例如 80、443、8080，客户端才能通过这个地址找到服务端。常见写法是绑定 `INADDR_ANY`，表示监听本机所有网卡。
+3. **`listen()` 开始监听**：将 Socket 从主动模式切换为被动模式，开始等待客户端连接。此时内核会维护两个队列：**SYN队列（半连接队列）**保存已收到 SYN、已回复 SYN+ACK、等待客户端 ACK 的连接；**Accept队列（全连接队列）**保存三次握手已完成、等待应用层 `accept()` 取走的连接。
+4. **`accept()` 取出已完成连接**：`accept()` 从 Accept 队列中取出一个已完成三次握手的连接，返回一个**新的已连接 Socket**。如果队列为空，默认会阻塞等待。
+5. **`send()`/`recv()` 收发数据**：服务端通过 `accept()` 返回的新 Socket 与这个客户端通信，监听 Socket 本身不负责数据传输。
+6. **`close()`/`shutdown()` 关闭连接**：`close()` 关闭文件描述符，在没有其他引用时触发 TCP 四次挥手；`shutdown()` 可以只关闭读端或写端，例如 `shutdown(fd, SHUT_WR)` 表示半关闭，自己不再发送数据但仍可接收数据。
+
+**客户端流程**：
+
+1. **`socket()` 创建客户端 Socket**：客户端同样创建一个 TCP Socket。
+2. **`connect()` 发起连接**：客户端指定服务端 IP 和端口调用 `connect()`，内核会自动分配临时端口，并触发 TCP 三次握手。
+3. **三次握手完成**：握手成功后，客户端的 `connect()` 返回；服务端内核把该连接放入 Accept 队列，等待服务端应用调用 `accept()` 取走。
+4. **`send()`/`recv()` 收发数据**：连接建立后，TCP 是全双工的，客户端和服务端可以同时发送和接收数据。
+5. **`close()` 关闭连接**：任意一方关闭连接都会触发 TCP 连接释放流程，典型情况下对应四次挥手。
+
+关键点：
+
+- **`accept()` 不负责三次握手**：三次握手由内核在 `connect()` 触发后完成，`accept()` 只是从已完成连接队列中取出连接。
+- **监听 Socket 和已连接 Socket 不同**：监听 Socket 继续负责接收新连接；`accept()` 返回的新 Socket 专门负责和某个客户端通信。
+- **TCP 是字节流协议**：`send()` 不保证一次把数据全部写完，`recv()` 也不保证一次读到完整消息，可能出现粘包/拆包；应用层需要通过定长、分隔符或长度前缀等方式定义消息边界。
+- **高并发服务需要 I/O 多路复用**：一个服务端会有一个监听 Socket 和大量已连接 Socket，通常使用 select/poll/epoll/kqueue 监控多个 fd，而不是为每个连接都创建一个线程。
+
+→ [计算机网络](articles/ios-basics/计算机网络.md)
+
+</details>
+
+<details>
+<summary><b>Q: 什么是TCP粘包/拆包？如何解决？</b></summary>
+
+TCP是字节流协议，没有消息边界。发送方两次 `send("Hello")` 和 `send("World")`，接收方一次 `recv()` 可能读到 `"HelloWorld"`（粘包），也可能分多次读到 `"Hel"`、`"loWorld"`（拆包）。
+
+产生原因：
+- 发送方：Nagle算法将多个小包合并发送
+- 接收方：应用程序读取速度与数据到达速度不同步
+- MSS/MTU限制：大消息被TCP分成多个段
+
+解决方案：
+| 方案 | 原理 | 示例 |
+|------|------|------|
+| 固定长度 | 每条消息固定N字节，不足补零 | 每条1024字节 |
+| 分隔符 | 特殊字符标记消息边界 | HTTP用 `\r\n\r\n` 分隔头部和正文 |
+| 长度前缀 | 消息头部携带消息体长度 | 前4字节为长度，后续为消息体（最常用） |
+| 自描述协议 | 使用有自描述能力的序列化格式 | Protobuf、JSON |
+
+实践中**长度前缀（TLV格式）**最常用：先读取固定长度的头部解析出消息体长度，再精确读取对应字节数。
+
+→ [计算机网络](articles/ios-basics/计算机网络.md)
+
+</details>
+
+<details>
+<summary><b>Q: 什么是I/O多路复用？select/poll/epoll的区别是什么？</b></summary>
+
+I/O多路复用允许**一个线程同时监控多个Socket**，当某个Socket有数据可读/可写时再去处理，避免了"一连接一线程"模型的高开销。
+
+三种机制对比：
+| 机制 | 最大连接数 | 实现方式 | 性能 |
+|------|-----------|----------|------|
+| select | 1024（FD_SETSIZE） | 遍历整个fd集合 | O(n) |
+| poll | 无限制 | 遍历整个fd数组 | O(n) |
+| epoll | 无限制 | 事件驱动（回调） | O(1)就绪事件 |
+
+epoll高效的核心：内核通过回调机制维护**就绪列表**，`epoll_wait()`只返回有事件的Socket，不需要每次遍历全部连接。
+
+epoll两种触发模式：
+- **LT（水平触发）**：只要缓冲区有数据，每次 `epoll_wait()` 都通知。编程简单，不容易丢数据
+- **ET（边缘触发）**：仅在状态变化时通知一次。高性能但编程复杂，必须一次读完所有数据，配合非阻塞I/O是Nginx等高性能服务器的标准做法
+
+macOS/iOS使用**kqueue**作为高性能I/O多路复用机制，功能与epoll类似。
+
+→ [计算机网络](articles/ios-basics/计算机网络.md)
+
+</details>
+
+<details>
+<summary><b>Q: REST与RPC的区别是什么？各自适用什么场景？</b></summary>
+
+| 对比项 | REST | RPC |
+|--------|------|-----|
+| 核心抽象 | **资源**（名词）：对资源做CRUD | **动作**（动词）：调用远程函数 |
+| API风格 | `GET /users/123` | `getUser(123)` |
+| 协议 | 基于HTTP语义 | 协议无关（HTTP、TCP、UDP） |
+| 数据格式 | 通常JSON/XML（文本） | 二进制（Protobuf）或文本（JSON） |
+| 耦合度 | 松耦合 | 紧耦合（需知道函数签名） |
+| 性能 | 一般 | 高（二进制序列化、长连接复用） |
+
+选择建议：
+- **对外公开API**：REST，通用性强，客户端无需特殊SDK
+- **内部微服务通信**：RPC，性能高、类型安全、接口定义严格
+
+→ [计算机网络](articles/ios-basics/计算机网络.md)
+
+</details>
+
+<details>
+<summary><b>Q: gRPC的核心特性是什么？Protobuf为什么比JSON高效？</b></summary>
+
+gRPC核心特性：
+- 基于HTTP/2：多路复用、头部压缩、双向流
+- Protocol Buffers：高效二进制序列化
+- IDL定义接口：`.proto`文件定义服务，自动生成各语言代码
+- 四种通信模式：一元RPC、服务端流、客户端流、双向流
+
+Protobuf比JSON高效的原因：
+- **字段编号代替字段名**：`name=2`编码时只传数字2而非字符串`"name"`
+- **Varint编码**：整数使用变长编码，小整数占更少字节（值为1只占1字节，JSON的`"user_id": 1`占14字节）
+- **二进制格式**：直接读取二进制偏移，无需文本解析
+- **体积**：通常为JSON的30%~50%
+
+同一份用户数据，JSON约68字节，Protobuf约30字节。加上HTTP/2的头部压缩和连接复用，gRPC在微服务间通信性能通常是REST的2~10倍。
+
+→ [计算机网络](articles/ios-basics/计算机网络.md)
 
 </details>
 
