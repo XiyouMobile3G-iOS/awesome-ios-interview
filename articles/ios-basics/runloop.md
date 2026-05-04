@@ -1087,6 +1087,21 @@ RunLoop 的 Mode 是一种事件分组机制，每个 Mode 内部包含独立的
 
 ### Q3: RunLoop 的运作流程是怎样的？
 
+严格来说，RunLoop 的运行可以分成**外层启动循环**和**内层事件循环**两层：
+
+```
+启动 API（外层）                     内层一次运行
+────────────────────────────────────────────────────────
+runMode:beforeDate:       ──调用一次──> CFRunLoopRunSpecific
+CFRunLoopRun()            ──do-while──> CFRunLoopRunSpecific
+[NSRunLoop run]           ──while(1)──> CFRunLoopRunSpecific
+[NSRunLoop runUntilDate:] ──while未超时──> CFRunLoopRunSpecific
+```
+
+外层循环由具体启动 API 决定：`runMode:beforeDate:` 只运行一次；`CFRunLoopRun()` 会反复调用 `CFRunLoopRunSpecific`，但外层会检查返回值，所以可以被 `CFRunLoopStop()` 停止；`[NSRunLoop run]` 则是无条件 `while(1)` 反复运行，因此对 `[NSRunLoop run]` 来说，单纯调用 `CFRunLoopStop()` 只能停止当前这一轮内层运行，随后外层还会再次进入。
+
+下面的流程图描述的是**一次 `CFRunLoopRunSpecific` 调用内部**的事件循环，也就是常说的内层循环：
+
 ```
 ┌─ CFRunLoopRunSpecific 入口 ──────────────────────────────
 │  1. 通知 Observer：即将进入 RunLoop (kCFRunLoopEntry)
@@ -1161,11 +1176,6 @@ RunLoop 检查以下退出条件：
 
 不满足退出条件则回到步骤 2；满足则跳出 do-while，由 `CFRunLoopRunSpecific` 通知 Observer `kCFRunLoopExit` 后结束。
 
-**注意**：以上是 `CFRunLoopRunSpecific` **一次调用**的内部流程。不同启动 API 在其外面还有不同的循环策略：
-- `runMode:beforeDate:` — 调用一次 `CFRunLoopRunSpecific` 就返回
-- `CFRunLoopRun()` — do-while 反复调用，可被 `CFRunLoopStop()` 停止
-- `[NSRunLoop run]` — while(1) 反复调用，无法被停止
-
 ### Q4: RunLoop 在实际开发中有哪些应用？
 
 **1. NSTimer 在滑动时失效问题**
@@ -1181,6 +1191,7 @@ RunLoop 检查以下退出条件：
 
 - 必须向 RunLoop 添加 Source（如 `NSPort`），否则 `CFRunLoopRunSpecific` 入口的 `__CFRunLoopModeIsEmpty` 检查会直接返回，RunLoop 根本不会启动
 - 不要使用 `[NSRunLoop run]`，它的外层 while(1) 无条件循环，无法被 `CFRunLoopStop()` 停
+- `CFRunLoopRun()` 也可以保活，并且能被 `CFRunLoopStop()` 停止，但它默认运行 DefaultMode，外层退出条件不如自定义循环灵活
 - 应使用 `while + runMode:beforeDate:` 的可控循环方式，配合标志位来控制退出
 
 ```objc

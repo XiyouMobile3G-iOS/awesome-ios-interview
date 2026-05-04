@@ -17,11 +17,11 @@ Clang 在 2012 年引入 **Clang Modules**，用一个预编译的二进制模�
 
 ```mermaid
 flowchart LR
-    A[源文件] -->|#include| B[Foundation.h 文本]
-    B --> C[每次都重新解析]
+    A["源文件"] -->|"include 头文件"| B["Foundation.h 文本"];
+    B --> C["每次都重新解析"];
 
-    D[源文件] -->|@import Foundation| E[Foundation.pcm 预编译]
-    E --> F[一次解析,多次复用]
+    D["源文件"] -->|"@import Foundation"| E["Foundation.pcm 预编译"];
+    E --> F["一次解析，多次复用"];
 ```
 
 ### 模块的组成
@@ -43,12 +43,12 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    A[编译器看到 @import Foo] --> B{Foo.pcm 在 MCP 里?}
-    B -- 否 --> C[fork 子进程<br/>递归编译 Foo 模块]
-    C --> D[写入 ModuleCache]
-    B -- 是 --> E[命中缓存]
-    D --> F[返回主编译]
-    E --> F
+    A["编译器看到 @import Foo"] --> B{"Foo.pcm 在 ModuleCache 中?"};
+    B -- "否" --> C["fork 子进程<br/>递归编译 Foo 模块"];
+    C --> D["写入 ModuleCache"];
+    B -- "是" --> E["命中缓存"];
+    D --> F["返回主编译"];
+    E --> F;
 ```
 
 `ModuleCache`（MCP）是一个全局 on-disk LRU 缓存（位于 `DerivedData/ModuleCache.noindex`）。问题在于：
@@ -68,8 +68,8 @@ Explicit Modules 把"在主编译里临时 fork 模块编译"改成"先统一规
 
 ```mermaid
 flowchart LR
-    A[Scan 依赖扫描] --> B[Build Modules<br/>显式编译.pcm]
-    B --> C[Compile Source<br/>主源码编译]
+    A["Scan 依赖扫描"] --> B["Build Modules<br/>显式编译 .pcm"];
+    B --> C["Compile Source<br/>主源码编译"];
 ```
 
 | 阶段 | 工具 | 产物 |
@@ -160,10 +160,10 @@ Explicit Modules 的性能高度取决于模块变体（variant）数量。相�
 
 ```mermaid
 flowchart LR
-    M[Foundation.modulemap] --> V1[arm64+DEBUG+macro_A]
-    M --> V2[arm64+RELEASE+macro_A]
-    M --> V3[arm64+DEBUG+macro_B]
-    M --> V4[x86_64+DEBUG+macro_A]
+    M["Foundation.modulemap"] --> V1["arm64 + DEBUG + macro_A"];
+    M --> V2["arm64 + RELEASE + macro_A"];
+    M --> V3["arm64 + DEBUG + macro_B"];
+    M --> V4["x86_64 + DEBUG + macro_A"];
 ```
 
 每一种（架构 × 配置 × 宏集合）都产生独立 `.pcm`。减少变体是 Apple 官方的第一优化建议：
@@ -204,15 +204,15 @@ Apple 官方数据：中等规模项目 clean build 25–40% 更快，但大厂�
 
 ```mermaid
 flowchart TD
-    A[是否使用 Xcode 15+?] -->|否| X[无需处理]
-    A -->|是| B[检查 Swift 侧 Explicit]
-    B --> C[SWIFT_ENABLE_EXPLICIT_MODULES=YES]
-    C --> D[Xcode 16+ 检查 C 侧]
-    D --> E[CLANG_ENABLE_EXPLICIT_MODULES=YES]
-    E --> F[测量 CI vs 本地收益]
-    F --> G{CI 变慢?}
-    G -- 是 --> H[Variant 收敛 /<br/>ModuleCache 持久化]
-    G -- 否 --> I[保留并推广]
+    A{"是否使用 Xcode 15+?"} -- "否" --> X["无需处理"];
+    A -- "是" --> B["检查 Swift 侧 Explicit"];
+    B --> C["SWIFT_ENABLE_EXPLICIT_MODULES = YES"];
+    C --> D["Xcode 16+ 检查 C 侧"];
+    D --> E["CLANG_ENABLE_EXPLICIT_MODULES = YES"];
+    E --> F["测量 CI vs 本地收益"];
+    F --> G{"CI 变慢?"};
+    G -- "是" --> H["Variant 收敛<br/>ModuleCache 持久化"];
+    G -- "否" --> I["保留并推广"];
 ```
 
 可落地的检查清单：
