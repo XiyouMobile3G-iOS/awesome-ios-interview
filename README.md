@@ -2600,42 +2600,295 @@ iOS的内存压缩机制会将长时间未访问的Dirty Memory压缩。如果�
 ### 多线程与并发
 
 <details>
-<summary><b>Q: 死锁的发生条件是什么？GCD 中什么时候会死锁？</b></summary>
+<summary><b>Q: 死锁的条件是什么？如何破坏？</b></summary>
 
+Coffman 死锁四个必要条件是：互斥、持有并等待、不可抢占、循环等待。破坏任一即可：
 
-死锁的发生需要**同时满足**以下四个必要条件（Coffman条件）：
+- **破互斥**：用读写锁、无锁结构、值类型
+- **破持有并等待**：一次性申请所有资源，或 `tryLock` + 回退
+- **破不可抢占**：加锁超时、可取消任务
+- **破循环等待**：全局加锁顺序（最常用，如按地址排序）
 
-1. **互斥**：资源同一时间只能被一个线程持有
-2. **持有并等待**：线程持有至少一个资源的同时，等待获取其他资源
-3. **不可抢占**：已被持有的资源不能被强制夺走，只能由持有者主动释放
-4. **循环等待**：存在一个线程等待链，形成环路（A等B，B等A）
+→ [死锁](articles/ios-advanced/死锁/死锁.md)
 
-破坏其中任意一个条件即可避免死锁。
+</details>
 
-GCD中的死锁：在**串行队列**中对**当前队列**执行`sync`是最典型的死锁场景：
+<details>
+<summary><b>Q: `DispatchQueue.main.sync` 为什么会死锁？什么时候不会？</b></summary>
 
-```swift
-// 死锁示例1：主线程同步执行主队列任务
-DispatchQueue.main.sync {
-    print("这里永远不会执行")
-}
+`sync` 把 block 排到队列尾部，阻塞当前线程等它完成。主队列是串行的，如果**调用方当前就在主线程**，主线程就会卡在 `sync`，而主队列需要等当前任务完成才能调度这个 block，形成循环等待。
 
-// 死锁示例2：串行队列中同步执行当前队列任务
-let queue = DispatchQueue(label: "com.example")
-queue.async {
-    queue.sync {
-        print("死锁")
+**不死锁的情况**：在**子线程**调用 `main.sync`（当前线程不是主队列的执行线程，可以阻塞等待）。
+
+→ [死锁](articles/ios-advanced/死锁/死锁.md)
+
+</details>
+
+<details>
+<summary><b>Q: iOS 中死锁的常见场景有哪些？</b></summary>
+
+1. **GCD 串行队列对自身 `sync`**
+
+   这是最经典的场景。比如主线程调用 `DispatchQueue.main.sync {}`，或者某个自定义串行队列正在执行任务时又调用同一个队列的 `queue.sync {}`。因为串行队列一次只能执行一个任务，当前任务不结束，后面的 sync block 就无法执行；而当前任务又在等待 sync block 完成，于是形成死锁。
+
+   ```swift
+   // 主线程执行时会死锁
+   DispatchQueue.main.sync {
+       updateUI()
+   }
+
+   let queue = DispatchQueue(label: "cache.queue")
+   queue.async {
+       queue.sync {     // 同一个串行队列 sync 自己
+           saveCache()
+       }
+   }
+   ```
+
+2. **锁的循环等待**
+
+   线程 A 持有 `lockA` 后等待 `lockB`，线程 B 持有 `lockB` 后等待 `lockA`。这同时满足“持有并等待”和“循环等待”两个条件，是最标准的死锁模型。多把锁没有统一加锁顺序时尤其容易出现。
+
+   ```swift
+   let lockA = NSLock()
+   let lockB = NSLock()
+
+   DispatchQueue.global().async {
+       lockA.lock()
+       lockB.lock()     // 等线程 B 释放 lockB
+   }
+
+   DispatchQueue.global().async {
+       lockB.lock()
+       lockA.lock()     // 等线程 A 释放 lockA
+   }
+   ```
+
+3. **非递归锁的同线程重入**
+
+   `NSLock`、默认 `pthread_mutex_t`、`os_unfair_lock` 都不是递归锁。同一线程已经持有锁后，如果调用链再次进入同一把锁，就会卡住。例如 public 方法加锁后调用另一个也会加同一把锁的 public 方法。修复时通常把公共逻辑抽到不加锁的 private 方法，或者在确实需要递归语义时使用 `NSRecursiveLock`。
+
+   ```swift
+   final class Store {
+       private let lock = NSLock()
+
+       func update() {
+           lock.lock()
+           defer { lock.unlock() }
+           reload()       // reload 内部再次 lock
+       }
+
+       func reload() {
+           lock.lock()    // 同一线程重入 NSLock，死锁
+           defer { lock.unlock() }
+       }
+   }
+   ```
+
+4. **用 `DispatchSemaphore.wait()` 把异步接口同步化**
+
+   常见于把网络请求、Core Bluetooth、WKWebView `evaluateJavaScript`、delegate 回调等异步接口包装成同步返回。如果调用方所在队列正在 `wait()`，而 `signal()` 又必须回到同一条串行队列执行，就会永远等不到信号。现代 Swift 代码应优先用 async/await 或 continuation 做桥接。
+
+   ```swift
+   func syncFetch() -> Data? {
+       let sem = DispatchSemaphore(value: 0)
+       var result: Data?
+
+       asyncFetch { data in
+           DispatchQueue.main.async {
+               result = data
+               sem.signal()
+           }
+       }
+
+       sem.wait()        // 如果在主线程调用，main.async 无法执行
+       return result
+   }
+   ```
+
+5. **FMDB / Core Data 嵌套队列**
+
+   FMDB 的 `inDatabase:` / `inTransaction:` 和 Core Data 的 `performAndWait:` 本质上都可能依赖串行队列同步执行。如果在同一个数据库队列或同一个 `NSManagedObjectContext` 的 `performAndWait:` 内部再次调用同步 API，就等价于串行队列 sync 自身。
+
+   ```swift
+   context.performAndWait {
+       updateObject()
+
+       context.performAndWait {   // 同一个 context 嵌套同步执行
+           saveObject()
+       }
+   }
+   ```
+
+6. **持锁时调用外部回调、发通知或派发同步任务**
+
+   锁内执行用户闭包、通知回调、delegate、KVO 等不可控代码非常危险。外部代码可能反向调用当前对象，也可能申请另一把锁，从而形成重入死锁或跨线程循环等待。正确做法是锁内只读写共享状态、生成快照，锁外再执行回调。
+
+   ```swift
+   final class EventCenter {
+       private let lock = NSLock()
+       private var observers: [() -> Void] = []
+
+       func notify() {
+           lock.lock()
+           observers.forEach { $0() }  // 回调里可能再次调用 add/notify
+           lock.unlock()
+       }
+
+       func add(_ observer: @escaping () -> Void) {
+           lock.lock()
+           observers.append(observer)
+           lock.unlock()
+       }
+   }
+   ```
+
+7. **`+initialize`、`+load` 或初始化路径中的跨类依赖**
+
+   Objective-C runtime 在执行 `+initialize` 时有内部锁保护。如果类 A 初始化时触发类 B，类 B 初始化又反向依赖类 A，在多线程同时触发时可能形成死锁。初始化逻辑应保持简单，只初始化自己，跨模块依赖挪到首次使用或显式启动流程中。
+
+   ```objc
+   @implementation ClassA
+   + (void)initialize {
+       [ClassB warmup];   // A 初始化依赖 B
+   }
+   @end
+
+   @implementation ClassB
+   + (void)initialize {
+       [ClassA warmup];   // B 初始化又反向依赖 A
+   }
+   @end
+   ```
+
+8. **主线程等待后台线程持有的锁，最终触发 watchdog**
+
+   这种情况未必是经典 Coffman 死锁，但用户感知等价：主线程卡在 `os_unfair_lock_lock`、`pthread_mutex_lock`、`semaphore_wait` 等位置，后台线程持锁执行长耗时任务，导致界面长时间无响应，最终被系统 watchdog 强杀。
+
+   ```swift
+   let lock = NSLock()
+
+   DispatchQueue.global().async {
+       lock.lock()
+       Thread.sleep(forTimeInterval: 10)   // 持锁做长耗时任务
+       lock.unlock()
+   }
+
+   DispatchQueue.main.async {
+       lock.lock()                         // 主线程长时间等待
+       lock.unlock()
+   }
+   ```
+
+9. **异常处理或 signal handler 中再次申请锁**
+
+   崩溃采集、signal handler、异常处理路径如果调用 `malloc`、`NSLog`、Objective-C runtime、dyld 等非 async-signal-safe API，可能在所有线程被挂起或原线程已持锁时再次申请同一把锁，造成采集链路自身死锁。
+
+   ```c
+   void handleSignal(int sig) {
+       // 错误示例：NSLog / malloc / Objective-C runtime 都不是 signal-safe
+       NSLog(@"crash signal: %d", sig);
+   }
+   ```
+
+10. **Swift Concurrency 误用**
+
+    actor 的可重入设计能减少传统锁死锁，但不代表不会卡死。常见风险包括：在 actor 中用信号量同步等待异步任务、Task 之间互相等待、把传统锁和 actor 隔离混用、在 `MainActor` 上等待需要回到主线程完成的任务。新并发代码要避免“同步等异步”，并保持锁、actor、队列的边界清晰。
+
+    ```swift
+    @MainActor
+    func loadSync() {
+        let sem = DispatchSemaphore(value: 0)
+
+        Task { @MainActor in
+            updateUI()
+            sem.signal()
+        }
+
+        sem.wait()   // MainActor 被阻塞，Task 无法继续执行
     }
-}
-```
+    ```
 
-**原因**：`sync`将任务追加到串行队列尾部，并阻塞当前线程等待该任务完成；而串行队列需要等待当前正在执行的任务（即包含`sync`调用的任务）完成后才能执行队列中的下一个任务，从而形成循环等待。
+→ [死锁](articles/ios-advanced/死锁/死锁.md)
 
-> **不会死锁的情况**：对**并发队列**执行`sync`不会死锁（并发队列可以同时执行多个任务）；在**子线程**对主队列执行`sync`也不会死锁（当前线程不在主队列上执行）。
+</details>
 
-锁的不当使用导致的死锁：所有线程以相同的顺序获取锁（先A后B），可以破坏循环等待条件来避免死锁。
+<details>
+<summary><b>Q: 死锁如何治理？请按事前、事中、事后三个阶段说明。</b></summary>
 
-→ [多线程](articles/ios-basics/多线程.md)
+死锁治理不是简单写几条编码规范，而是一套闭环：**事前降低引入概率，事中及时发现并保留现场，事后完成归因、修复和防劣化**。规范、Lint、Code Review 属于事前准入；线上监控、抓栈、分型、灰度验证和规则回灌，才构成完整治理。
+
+#### 事前：预防与准入
+
+1. **选择更安全的并发模型**
+
+   新 Swift 代码优先使用 `actor`、async/await、`@MainActor`、值类型、copy-on-write 或串行队列封装状态，减少共享可变状态和显式锁的暴露面。锁越少，形成循环等待的机会越少。
+
+2. **统一加锁顺序，破坏循环等待**
+
+   如果一段代码可能同时拿多把锁，必须定义全局顺序，比如按模块层级、资源 id、对象地址排序。所有代码都按同一顺序加锁、反向释放，避免线程 A 拿 A 等 B、线程 B 拿 B 等 A。
+
+3. **缩短临界区，避免持有并等待**
+
+   临界区只做共享状态读写，不做 I/O、网络、数据库大事务、图片解码、复杂计算，也不在持锁时等待另一个锁、队列、信号量或异步任务。能先准备数据再加锁提交，就不要锁住整个流程。
+
+4. **锁内不调用外部代码**
+
+   不在锁内调用用户闭包、delegate、通知、KVO、block 回调或可被子类重写的方法。锁内复制快照，锁外再回调。这样可以避免外部代码重入当前对象，也避免把当前锁和调用方内部锁串成不可控依赖。
+
+5. **避免同步等待异步结果**
+
+   不把异步 API 包成 `sem.wait()` 或 `DispatchGroup.wait()` 的同步 API，尤其不能在主线程或回调所在串行队列上等待。需要桥接旧接口时优先用 `withCheckedContinuation`，让调用方通过 `await` 挂起，而不是阻塞线程。
+
+6. **建立团队红线和 Code Review 清单**
+
+   明确禁止主线程 `semaphore.wait()`、禁止串行队列 sync 自身、禁止 `performAndWait` 嵌套、禁止持锁发通知、禁止 `+initialize` 跨类依赖。凡是引入多把锁、信号量、条件变量、`performAndWait` 的改动，都应作为并发风险重点审查，并通过 SwiftLint、pre-commit、TSan CI、Swift 严格并发检查等工具落地。
+
+#### 事中：检测、保护与现场保留
+
+1. **建立主线程卡死监控**
+
+   通过 RunLoop observer、主线程 ping、MetricKit、Sentry App Hangs 或自研卡死监控判断主线程是否长时间无响应。卡死发生时要抓全线程堆栈、线程状态、队列 label、CPU 使用情况和关键寄存器。
+
+2. **等待必须有超时和失败路径**
+
+   对信号量、条件变量、跨线程等待尽量设置超时；能用 `tryLock` 的地方，用失败回退代替无限等待。超时不是为了吞掉问题，而是为了避免主线程永久阻塞，并记录锁等待耗时、线程 id、队列 label、业务上下文。
+
+3. **主线程路径特殊保护**
+
+   主线程不应该等待后台长任务或不可控锁。必须回主线程的同步封装要先判断是否已经在主线程；UI 状态用 `@MainActor` 约束，避免后台线程拿 UI 锁或主线程等待后台锁。
+
+4. **高风险封装加断言和埋点**
+
+   数据库队列、缓存锁、同步桥接层可以记录当前队列 label、线程 id、锁等待耗时，并在 Debug 下断言“不能从同一队列同步进入”。线上则控制采样，避免监控本身引入性能问题。
+
+5. **监控链路自身要安全**
+
+   卡死和崩溃采集路径不能调用 `malloc`、`NSLog`、Objective-C runtime、dyld 等非 async-signal-safe API，避免在所有线程被挂起时引入二次死锁。
+
+#### 事后：归因、修复与防劣化
+
+1. **先区分死锁、死循环和单纯耗时**
+
+   死锁通常表现为相关线程 CPU 接近 0，线程状态处于 `WAITING/BLOCKED`，栈顶常见 `__psynch_mutexwait`、`semaphore_wait_trap`、`dispatch_sync_wait`、`os_unfair_lock_lock`。死循环通常 CPU 高，线程处于 running；单纯耗时则可能有 I/O、计算或主线程大任务堆栈。
+
+2. **做全线程堆栈聚合和死锁图分析**
+
+   只看主线程不够，必须找到“主线程在等谁、那个线程又在等谁”。能拿到锁 owner 时，可以建立“线程等待锁、锁被线程持有”的有向图，判定是否存在环路。不能自动判环时，也要通过队列 label、锁函数、业务栈聚合定位高频调用链。
+
+3. **按根因修复并补测试**
+
+   修复不应只是在某处加超时。要回到根因：统一锁顺序、拆掉同步等待、缩短临界区、把锁内回调挪到锁外、把嵌套 `performAndWait` 改成异步或分层 API。能复现的死锁要补单元测试、并发压力测试或 TSan 测试任务。
+
+4. **灰度验证和指标回看**
+
+   修复后通过灰度观察卡死率、watchdog 崩溃率、App Hang 数量、受影响页面和版本分布。死锁类问题要看趋势而不是单点，因为它通常依赖时序，低频但影响严重。
+
+5. **把事故复盘回灌到准入体系**
+
+   把事故复盘变成工程规则：SwiftLint / pre-commit 禁止危险 API，用 CI 跑 TSan Job，把高风险并发 API 列入 Code Review checklist，并在基础库中提供安全封装，减少业务层直接操作锁、信号量和同步队列的机会。
+
+→ [死锁](articles/ios-advanced/死锁/死锁.md)
 
 </details>
 
