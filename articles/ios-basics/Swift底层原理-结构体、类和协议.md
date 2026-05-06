@@ -71,21 +71,21 @@ class Class: NSObject {
 | **Swift 扩展部分**（紧接在ObjC布局之后） | flags | Swift运行时标志 |
 | | instanceSize / instanceAlignMask | 实例大小和对齐掩码 |
 | | typeDescriptor | 类型描述符，包含泛型参数信息、字段描述等 |
-| | vtable[] | 虚函数表，Swift方法派发用 |
+| | vtable[] | 虚函数表，存储Swift可重写方法槽位，包括实例方法和可重写的`class func` |
 | | Protocol Conformance Records | 协议一致性记录，记录遵循的Swift协议及见证表位置 |
 
 核心设计思路是：**Swift编译器将类对象设计为Objective-C的`objc_class`结构向后扩展的形式**。
 
-- **Objective-C部分**：完全兼容`objc_class`内存布局。ObjC运行时的代码是按`objc_class`的固定偏移量读取字段的，它只会访问`[起始地址, 起始地址 + sizeof(objc_class))`范围内的内存，超出这个范围的Swift扩展部分，ObjC运行时的代码中没有任何指令去访问。因此`objc_msgSend`、method swizzling、KVO等机制都能正常工作
+- **Objective-C部分**：完全兼容`objc_class`内存布局。ObjC运行时的代码是按`objc_class`的固定偏移量读取字段的，它只会访问`[起始地址, 起始地址 + sizeof(objc_class))`范围内的内存，超出这个范围的Swift扩展部分，ObjC运行时的代码中没有任何指令去访问。因此ObjC可见成员的`objc_msgSend`、method swizzling、KVO等机制都能正常工作
 - **Swift扩展部分**：紧接在ObjC布局之后，追加了vtable（虚表派发，比`objc_msgSend`更快）、typeDescriptor（泛型参数、字段反射等Swift特有数据）、协议一致性记录（该类型遵循了哪些Swift协议及对应见证表位置）
 
-两个运行时各取所需，互不干扰——这也解释了为什么继承自NSObject的Swift类既能被`objc_msgSend`消息派发调用（走前半部分的方法列表），又能使用Swift的vtable快速派发（走后半部分的虚函数表）。
+两个运行时各取所需，互不干扰——这也解释了为什么继承自NSObject的Swift类既能让ObjC可见或`dynamic`成员被`objc_msgSend`消息派发调用（走前半部分的方法列表），又能让普通Swift可重写成员使用Swift的vtable快速派发（走后半部分的虚函数表）。
 
 #### 元类（Metaclass）的结构
 
-类对象的第一个字段`isa`指向**元类**。元类在ObjC运行时中的作用是存储**类方法**——当你调用`MyClass.someClassMethod()`时，`objc_msgSend`通过类对象的`isa`找到元类，在元类的方法列表中查找类方法，这和在类对象中查找实例方法的流程完全一致。
+类对象的第一个字段`isa`指向**元类**。这里的元类是ObjC运行时意义上的元类，负责**ObjC消息派发中的类方法查找**：当某个Swift类方法暴露给ObjC（如`@objc class func`）或被`@objc dynamic`强制走消息派发时，编译器会在元类的方法列表中注册对应的ObjC thunk，`objc_msgSend`通过类对象的`isa`找到元类再查找方法。
 
-**元类的结构和纯ObjC类的[元类对象](./Objective-C底层原理-NSObject.md#元类对象meta-class-object)完全相同，就是标准的`objc_class`**（没有Swift扩展部分）。元类只负责存储类方法列表供`objc_msgSend`查找，Swift的vtable、typeDescriptor等信息都只存在类对象上，不需要在元类上重复。
+**元类的结构和纯ObjC类的[元类对象](./Objective-C底层原理-NSObject.md#元类对象meta-class-object)完全相同，就是标准的`objc_class`**（没有Swift扩展部分）。普通Swift `class func` 的Swift派发不依赖元类；只要它可被子类重写，Swift编译器会在类对象的Swift vtable中为它分配槽位。Swift的vtable、typeDescriptor等信息都只存在类对象上，不需要在元类上重复。
 
 **ARC存储兼容性：**
 
@@ -137,7 +137,17 @@ class SomeClass: NSObject {
         print("使用vtable派发，性能更好")
     }
     
-    // 4. final方法 - 静态派发
+    // 4. 普通class func - 可重写时使用Swift vtable派发
+    class func swiftClassMethod() {
+        print("Swift类方法也可以使用vtable派发")
+    }
+
+    // 5. @objc dynamic class func - 强制从ObjC元类方法列表消息派发
+    @objc dynamic class func dynamicClassMethod() {
+        print("强制使用objc_msgSend派发")
+    }
+
+    // 6. final方法 - 静态派发
     final func finalMethod() {
         print("编译时确定调用地址，可内联优化")
     }
@@ -215,7 +225,7 @@ InlineRefCountBits 这 8 字节通过 bit 63（UseSlowRC）在两种模式之间
 | typeDescriptor | 类型描述符，包含泛型参数、字段反射信息等 |
 | vtable[] | 虚函数表，存储所有可重写方法的函数指针（包括实例方法和`class func`） |
 
-**纯Swift类没有元类（metaclass）。** 这是与ObjC继承体系的根本区别之一：
+**纯Swift类的类型方法派发不依赖ObjC元类方法列表。** 这是与ObjC继承体系的重要区别之一：
 
 - 在ObjC中，实例方法存在类对象的方法列表里，**类方法存在元类的方法列表里**。元类本身也是一个`objc_class`结构，`objc_msgSend`通过类对象的isa找到元类来查找类方法——这种双层设计让实例方法调用和类方法调用可以用统一的消息派发逻辑处理
 - 在纯Swift类中，类方法的派发不依赖元类机制：
@@ -223,19 +233,19 @@ InlineRefCountBits 这 8 字节通过 bit 63（UseSlowRC）在两种模式之间
   - `class func` → 可被子类override时，编译器在vtable中为其分配槽位，和实例方法放在**同一个vtable**里
   - `final class func` → 等价于`static func`，静态派发
 
-因此纯Swift类的vtable同时包含实例方法和可重写的类方法，不需要额外的元类结构
+因此Swift vtable可以同时包含实例方法和可重写的类方法；Swift方法派发本身不需要额外的ObjC元类方法列表。
 
 与继承自NSObject的类对象的混合结构对比：
 
 | 对比项 | 继承自NSObject | 纯Swift类 |
 |-------|---------------|----------|
 | 元数据起始布局 | ObjC `objc_class`（isa/superclass/cache/bits） | Swift `ClassMetadata`（kind/superclass/flags） |
-| 元类（metaclass） | 有，类对象isa指向元类（纯`objc_class`，无Swift扩展），类方法存在元类方法列表中 | **无**，类方法和实例方法统一放在vtable中 |
+| 元类（metaclass） | 有ObjC元类（纯`objc_class`，无Swift扩展），`@objc`/`dynamic`类方法通过元类方法列表参与`objc_msgSend`；普通Swift `class func`可在Swift vtable中派发 | Swift方法派发不依赖ObjC元类方法列表；可重写`class func`和实例方法统一放在vtable中 |
 | ObjC方法缓存(cache_t) | 有 | 无 |
-| ObjC方法/属性/协议列表 | 有（通过class_rw_t） | 无 |
-| vtable | 有（追加在ObjC布局之后），仅包含实例方法 | 有（直接内嵌在ClassMetadata中），包含实例方法和`class func` |
+| ObjC方法/属性/协议列表 | 有（ObjC可见成员通过class_rw_t记录） | 无 |
+| vtable | 有（追加在ObjC布局之后），包含Swift可重写方法槽位，包括实例方法和可重写的`class func` | 有（直接内嵌在ClassMetadata中），包含实例方法和可重写的`class func` |
 | typeDescriptor | 有 | 有 |
-| `objc_msgSend`兼容 | 兼容 | 不兼容（除非显式`@objc`桥接） |
+| `objc_msgSend`兼容 | 默认兼容，尤其适合KVO、Selector、method swizzling等ObjC运行时能力 | Swift-only成员默认不参与；ObjC可表示成员可显式`@objc`/`dynamic`桥接到消息派发 |
 | 引用计数方式 | ObjC的isa extra_rc + SideTable | 内联InlineRefCountBits（被weak引用后切换为SideTable模式） |
 
 可以看出，纯Swift类的元数据更加紧凑——省去了ObjC运行时所需的`cache_t`、`class_rw_t`等结构，vtable也直接内嵌而非追加，整体开销更小。
@@ -674,7 +684,7 @@ final class FinalClass {
 
 ### 虚函数表派发（V-Table Dispatch）
 
-类的实例方法默认使用虚函数表派发：
+类的实例方法默认使用虚函数表派发；可被子类重写的`class func`也会通过类元数据中的vtable派发：
 
 ```swift
 class Animal {
@@ -694,6 +704,18 @@ class Dog: Animal {
     
     func wagTail() {            // vtable槽位2（新方法）
         print("Wagging tail")
+    }
+}
+
+class Factory {
+    class func makeName() -> String {  // 类型方法的vtable槽位
+        "Factory"
+    }
+}
+
+class DogFactory: Factory {
+    override class func makeName() -> String {  // 重写类型方法槽位
+        "DogFactory"
     }
 }
 ```
@@ -864,17 +886,17 @@ struct PersonGreetingWitnessTable {
 ### Q1: 纯Swift类和继承自NSObject的Swift类在底层有什么区别？
 
 1. **实例头部不同**：继承自NSObject的类头部是isa指针（兼容ObjC运行时），引用计数存储在isa的extra_rc位域和SideTable中；纯Swift类头部是HeapMetadata指针 + 8字节的InlineRefCountBits（bit 0-31 unowned计数，bit 32 isDeiniting，bit 33-62 strong计数，bit 63 UseSlowRC标志），默认内联存储无需查找外部结构，缓存更友好。当对象被weak引用时，bit 63置1，这8字节切换为指向`HeapObjectSideTableEntry`的指针，此后所有引用计数（strong、unowned、weak）由SideTable统一管理，该切换不可逆
-2. **类型元数据结构不同**：继承自NSObject的类的类对象是ObjC与Swift的混合结构——前半部分是标准的`objc_class`布局（isa/superclass/cache_t/class_data_bits_t → class_rw_t，包含ObjC方法列表、属性列表、协议列表），后半部分追加了Swift的vtable（仅包含实例方法）、typeDescriptor、协议一致性记录等，ObjC运行时只访问前半部分，Swift运行时访问后半部分，两者互不干扰；纯Swift类的ClassMetadata是纯Swift结构（kind/superclass/flags/instanceSize/vtable等），没有ObjC的cache_t和class_rw_t，vtable直接内嵌且同时包含实例方法和`class func`，整体更紧凑
-3. **有无元类**：继承自NSObject的类有元类（标准`objc_class`结构，存储类方法供`objc_msgSend`查找）；纯Swift类没有元类，类方法（`class func`）和实例方法统一放在同一个vtable中
-4. **方法派发**：两者都支持vtable派发、静态派发和见证表派发。区别在于：继承自NSObject的类额外支持`objc_msgSend`消息派发，可使用`@objc dynamic`强制消息派发来支持method swizzling；纯Swift类没有ObjC运行时兼容结构，无法使用`@objc`/`dynamic`，因此不支持消息派发和method swizzling
+2. **类型元数据结构不同**：继承自NSObject的类的类对象是ObjC与Swift的混合结构——前半部分是标准的`objc_class`布局（isa/superclass/cache_t/class_data_bits_t → class_rw_t，包含ObjC可见的方法列表、属性列表、协议列表），后半部分追加了Swift的vtable（包含Swift可重写方法槽位，包括实例方法和可重写的`class func`）、typeDescriptor、协议一致性记录等，ObjC运行时只访问前半部分，Swift运行时访问后半部分，两者互不干扰；纯Swift类的ClassMetadata是纯Swift结构（kind/superclass/flags/instanceSize/vtable等），没有ObjC的cache_t和class_rw_t，vtable直接内嵌且同样可以包含实例方法和可重写的`class func`，整体更紧凑
+3. **有无ObjC元类参与派发**：继承自NSObject的类有ObjC元类（标准`objc_class`结构），`@objc`/`dynamic`类方法通过元类方法列表供`objc_msgSend`查找；普通Swift `class func`可在Swift vtable中派发。纯Swift类的Swift方法派发不依赖ObjC元类方法列表，可重写`class func`和实例方法统一放在vtable中
+4. **方法派发**：两者都支持vtable派发、静态派发和见证表派发。区别在于：继承自NSObject的类天然接入ObjC运行时，可使用`@objc dynamic`强制消息派发来支持Selector、method swizzling、KVO等能力；纯Swift类的Swift-only成员默认不走`objc_msgSend`，但ObjC可表示成员也可以显式`@objc`/`dynamic`桥接到消息派发，只是不会因此自动获得完整的NSObject/KVO语义
 
 ### Q2: Swift有哪些方法派发方式？
 
 **1. 静态派发（Static Dispatch）**：编译时确定调用地址，性能最优，可内联优化。适用于结构体/枚举的所有方法、final类和final方法、private方法、`static func`。函数地址在编译期直接嵌入调用指令中，不依赖任何派发表。
 
-**2. 虚函数表派发（V-Table Dispatch）**：通过类元数据中的vtable查找函数指针。适用于类的实例方法（默认），以及纯Swift类中可被子类override的`class func`。虚函数表内嵌在类的元数据结构中（继承自NSObject的类追加在`objc_class`布局之后，纯Swift类直接内嵌在ClassMetadata中），存储类的可重写方法的函数指针，支持继承和方法重写。
+**2. 虚函数表派发（V-Table Dispatch）**：通过类元数据中的vtable查找函数指针。适用于类的实例方法（默认），以及可被子类override的`class func`；这点对纯Swift类和继承自NSObject的Swift类都成立。虚函数表内嵌在类的元数据结构中（继承自NSObject的类追加在`objc_class`布局之后，纯Swift类直接内嵌在ClassMetadata中），存储Swift可重写方法的函数指针，支持继承和方法重写。
 
-**3. 消息派发（Message Dispatch）**：通过Objective-C的`objc_msgSend`进行动态查找。仅适用于继承自NSObject的Swift类中`@objc dynamic`标记的方法，因为消息派发依赖ObjC运行时的`objc_class`兼容结构（cache_t方法缓存、class_rw_t方法列表等），纯Swift类没有这些结构，无法使用消息派发。支持method swizzling和KVO。
+**3. 消息派发（Message Dispatch）**：通过Objective-C的`objc_msgSend`进行动态查找。适用于Objective-C方法，以及Swift中显式`@objc dynamic`且ObjC可表示的成员；继承自NSObject的Swift类是最常见场景，因为它天然接入Selector、KVO、method swizzling等ObjC运行时能力。消息派发依赖ObjC运行时的方法缓存和方法列表，支持运行时替换实现。
 
 **4. 见证表派发（Witness Table Dispatch）**：通过协议见证表查找函数指针。见证表属于协议一致性关系（类型-协议的组合），不存储在类型元数据内部，而是作为独立的全局符号写入Mach-O中——见证表本身（函数指针数组）在`__DATA,__const`段，协议一致性记录在`__TEXT,__swift5_proto`段。每个类型对每个协议都有独立的见证表，支持多协议组合。这样设计是因为一个类型可以遵循多个协议，如果都塞进类型元数据会导致结构不固定；独立存储后，类型元数据保持固定布局，见证表通过一致性记录间接关联。
 
