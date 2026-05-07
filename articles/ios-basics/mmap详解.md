@@ -253,23 +253,25 @@ void free_mmap(void *ptr, size_t size) {
 
 ## iOS中的mmap应用
 
-### 1. 崩溃日志采集
+### 1. APM现场缓存与崩溃上下文
 
-mmap在崩溃采集中非常重要，因为它可以保证数据在崩溃时不丢失。
+mmap在APM里更适合做**崩溃前的现场缓存**，例如breadcrumbs、最近页面路径、最近网络请求摘要、轻量日志、FPS/CPU采样等高频上下文。它的价值是：App正常运行时预先建立一块固定大小的文件映射，后续写入只是在已有映射内做内存写入，开销低，适合ring buffer。
+
+但要注意：**mmap不等于Crash Report主写入方案，也不能保证崩溃数据绝对不丢失**。成熟Crash SDK通常仍会在Crash handler中写一个独立的崩溃报告文件，mmap只作为补充上下文。以Sentry Cocoa为例，它的Crash链路是`onCrash -> sentrycrashreport_writeStandardReport -> openBufferedWriter -> write`，breadcrumbs则是内存ring buffer，并没有把Crash Report本身做成mmap文件。
 
 ```c
-// 崩溃日志的mmap结构
+// APM现场缓存的mmap结构：用于记录崩溃前的breadcrumbs/页面/网络摘要
 typedef struct {
     int fd;
     char *mapped_addr;
     size_t mapped_size;
     size_t write_offset;
-} CrashLogMmap;
+} APMContextMmap;
 
-static CrashLogMmap g_crash_mmap = {-1, NULL, 0, 0};
+static APMContextMmap g_apm_context = {-1, NULL, 0, 0};
 
 // App启动时初始化
-bool init_crash_log_mmap(const char *path) {
+bool init_apm_context_mmap(const char *path) {
     int fd = open(path, O_RDWR | O_CREAT, 0644);
     if (fd < 0) return false;
     
@@ -282,42 +284,44 @@ bool init_crash_log_mmap(const char *path) {
         return false;
     }
     
-    g_crash_mmap.fd = fd;
-    g_crash_mmap.mapped_addr = addr;
-    g_crash_mmap.mapped_size = size;
-    g_crash_mmap.write_offset = 0;
+    g_apm_context.fd = fd;
+    g_apm_context.mapped_addr = addr;
+    g_apm_context.mapped_size = size;
+    g_apm_context.write_offset = 0;
     
     return true;
 }
 
-// 在Signal Handler中写入（异步安全）
-void crash_log_write(const char *data, size_t len) {
-    if (!g_crash_mmap.mapped_addr) return;
-    if (g_crash_mmap.write_offset + len > g_crash_mmap.mapped_size) return;
+// 正常运行时持续写入轻量上下文
+void apm_context_write(const char *data, size_t len) {
+    if (!g_apm_context.mapped_addr) return;
+    if (g_apm_context.write_offset + len > g_apm_context.mapped_size) return;
     
-    // 直接写入映射内存，即使进程崩溃数据也会保存
-    char *dst = g_crash_mmap.mapped_addr + g_crash_mmap.write_offset;
+    char *dst = g_apm_context.mapped_addr + g_apm_context.write_offset;
     for (size_t i = 0; i < len; i++) {
         dst[i] = data[i];
     }
-    g_crash_mmap.write_offset += len;
+    g_apm_context.write_offset += len;
 }
 ```
 
-**为什么崩溃采集要用mmap？**
+**mmap在崩溃场景中的正确位置**
 
 ```plaintext
-传统write()的问题：
-1. 数据先写入内核缓冲区，崩溃时可能未刷盘
-2. fsync()可能因为持有锁而死锁
-3. 崩溃瞬间时间紧迫，IO操作可能来不及完成
+推荐：
+1. App正常运行时预先mmap一块文件，作为APM上下文ring buffer
+2. 高频写入breadcrumbs、页面路径、网络摘要、轻量日志
+3. Crash发生时，handler只写最小Crash Report文件
+4. 下次启动读取Crash Report + mmap上下文，合并上报
 
-mmap的优势：
-1. 写入映射内存后，数据由内核管理，不会丢失
-2. 不需要显式调用fsync
-3. 预先映射好，崩溃时直接写入，无需额外初始化
-4. 避免了文件锁问题
+不推荐：
+1. Crash handler里临时open + mmap + munmap
+2. Crash handler里调用msync
+3. 只依赖mmap承载完整Crash Report
+4. 宣称mmap能保证崩溃数据绝对不丢
 ```
+
+Crash handler里最保守的做法仍然是：使用预分配buffer和已知路径，尽量只调用`open`、`write`、`close`这类低层系统调用，写入最小崩溃现场；复杂解析、符号化、上下文合并、网络上报都放到下次启动后完成。
 
 ### 2. MMKV高性能存储
 
@@ -414,9 +418,9 @@ mmap的优势：
 
 | 特性 | MMKV | NSUserDefaults |
 |-----|------|----------------|
-| 写入方式 | mmap，写入即持久化 | plist文件，需要同步 |
+| 写入方式 | mmap，减少用户态拷贝和频繁系统调用 | plist文件，需要同步 |
 | 性能 | 极高（内存操作） | 较低（文件IO） |
-| 崩溃安全 | 高（数据不丢失） | 低（可能丢失未同步数据） |
+| 崩溃恢复 | 较好（已写入映射页的数据通常更容易恢复） | 较弱（可能丢失未同步数据） |
 | 多进程支持 | 支持 | 不支持 |
 | 增量更新 | 支持 | 不支持（全量写入） |
 
@@ -637,16 +641,18 @@ long page_size = sysconf(_SC_PAGESIZE);  // 通常是4096
 
 ```c
 // MAP_SHARED映射的同步
-// 方式1：显式同步
+// 方式1：显式同步到文件系统缓存/存储设备
 msync(mapped, size, MS_SYNC);
 
-// 方式2：解除映射时自动同步
+// 方式2：解除映射时内核会处理脏页，但不应把它当成强持久化边界
 munmap(mapped, size);
 
-// 方式3：进程退出时自动同步
+// 方式3：进程退出后脏页通常仍由内核管理并适时写回
 
 // 注意：MAP_PRIVATE映射的修改不会写回文件
 ```
+
+`MAP_SHARED`表示修改会回写到映射文件，但“回写”不等于“立刻落到稳定存储”。如果业务要求强一致或强持久化，仍然要在正常上下文中设计`msync`、`fsync`、WAL、校验和等机制。Crash handler中不要把`msync`当成可靠补救手段。
 
 ### 4. 错误处理
 
@@ -680,17 +686,21 @@ if (mapped == MAP_FAILED) {
 ```plaintext
 在Signal Handler中使用mmap：
 
-可以安全使用：
-• 写入已映射的内存区域
-• msync()（但可能阻塞）
+相对低风险：
+• 对已预映射、已校验地址范围的内存做简单赋值
+• 更新预分配的原子偏移或固定长度字段
 
 不建议使用：
 • mmap()（可能使用锁）
 • munmap()（可能使用锁）
+• msync()（可能阻塞，不是async-signal-safe的可靠选择）
+• malloc/free/Objective-C/Swift调用/网络请求/复杂日志系统
 
 最佳实践：
 • 在正常运行时预先创建映射
-• 崩溃时只进行内存写入操作
+• 崩溃前持续写入ring buffer上下文
+• 崩溃时只写最小Crash Report，并尽量使用低层系统调用
+• 下次启动后再合并Crash Report和mmap上下文
 ```
 
 ---
@@ -720,17 +730,17 @@ if (mapped == MAP_FAILED) {
    - MAP_SHARED映射的内存可被多个进程共享
    - iOS中主要用于App与Extension（Widget、Share Extension等）之间的数据共享
 
-5. **崩溃安全性**
-   - 写入映射内存后，数据由内核管理
-   - 即使进程崩溃，已写入的数据也会被持久化
-   - 无需担心缓冲区未刷盘的问题
+5. **崩溃上下文恢复**
+   - 预映射ring buffer适合记录崩溃前的轻量现场
+   - 进程崩溃后，已写入的映射页通常比用户态缓冲区更容易恢复
+   - 但它不保证绝对持久化，完整Crash Report仍建议写独立文件
 
 **适用场景：**
 
 | 场景 | 说明 |
 |-----|------|
-| 崩溃日志采集 | 崩溃时写入预映射的内存，数据不丢失 |
-| 高性能KV存储 | 如MMKV，写入即持久化，性能远超NSUserDefaults |
+| APM现场缓存 | 崩溃前写入预映射ring buffer，记录breadcrumbs、页面、网络摘要 |
+| 高性能KV存储 | 如MMKV，减少序列化和频繁文件IO，性能远超NSUserDefaults |
 | 大文件处理 | 如日志分析、视频处理，无需一次性加载到内存 |
 | 离线资源包 | WebView离线包、游戏资源包的快速加载 |
 | 数据库实现 | SQLite等数据库使用mmap加速文件访问 |

@@ -1011,17 +1011,17 @@ CocoaPods支持多种链接配置，主要通过Podfile中的选项控制：
    - MAP_SHARED映射的内存可被多个进程共享
    - iOS中主要用于App与Extension（Widget、Share Extension等）之间的数据共享
 
-5. **崩溃安全性**
-   - 写入映射内存后，数据由内核管理
-   - 即使进程崩溃，已写入的数据也会被持久化
-   - 无需担心缓冲区未刷盘的问题
+5. **崩溃上下文恢复**
+   - 预映射 ring buffer 适合记录崩溃前的 breadcrumbs、页面路径、网络摘要等轻量现场
+   - 进程崩溃后，已写入映射页通常比用户态缓冲区更容易恢复
+   - 但 mmap 不保证绝对持久化，完整 Crash Report 仍建议写独立文件
 
 **适用场景：**
 
 | 场景 | 说明 |
 |-----|------|
-| 崩溃日志采集 | 崩溃时写入预映射的内存，数据不丢失 |
-| 高性能KV存储 | 如MMKV，写入即持久化，性能远超NSUserDefaults |
+| APM现场缓存 | 崩溃前写入预映射 ring buffer，记录 breadcrumbs、页面、网络摘要 |
+| 高性能KV存储 | 如MMKV，减少序列化和频繁文件IO，性能远超NSUserDefaults |
 | 大文件处理 | 如日志分析、视频处理，无需一次性加载到内存 |
 | 离线资源包 | WebView离线包、游戏资源包的快速加载 |
 | 数据库实现 | SQLite等数据库使用mmap加速文件访问 |
@@ -3799,7 +3799,7 @@ Realm使用mmap将数据文件映射到进程的虚拟地址空间。Realm对象
 <details>
 <summary><b>Q: MMKV相比UserDefaults的性能优势在哪里？</b></summary>
 
-UserDefaults每次写入都需要将整个plist字典重新序列化并写入磁盘，时间复杂度与总数据量成正比。MMKV基于mmap内存映射和protobuf序列化，使用增量追加写入策略——新数据直接追加到文件末尾，单次写入时间与写入数据量成正比，与总数据量无关。同时mmap写入由操作系统内核负责异步刷盘，即使进程崩溃也不会丢失数据。
+UserDefaults每次写入都需要将整个plist字典重新序列化并写入磁盘，时间复杂度与总数据量成正比。MMKV基于mmap内存映射和protobuf序列化，使用增量追加写入策略——新数据直接追加到文件末尾，单次写入时间与写入数据量成正比，与总数据量无关。同时mmap减少了频繁文件IO和用户态拷贝，已写入映射页的数据由内核管理，进程崩溃后通常比普通用户态缓冲更容易恢复；但它不等于强持久化，关键数据仍需要校验、重放或合适的同步策略。
 
 → [iOS中的数据库](articles/ios-basics/iOS中的数据库.md)
 
@@ -4337,7 +4337,7 @@ Mach 异常通过端口和消息传递。异常发生后，内核会构造包含
 <details>
 <summary><b>Q: Signal Handler 为什么要求异步信号安全？哪些操作不能在里面做？</b></summary>
 
-信号可能在任何指令执行期间打断当前线程，例如线程正在 `malloc`、`printf`、Objective-C runtime 或持锁代码中执行时突然收到 `SIGSEGV`。如果 Signal Handler 再调用同一类非重入函数，就可能再次获取已经持有的锁，造成死锁；也可能操作处于半更新状态的数据结构，造成二次崩溃。因此崩溃现场的 Signal Handler 只能做极少量异步信号安全的工作，例如使用预分配缓冲区、写原始地址、调用 `write()`、`open()`、`close()`、`_exit()`、`sigaction()`、`sigprocmask()` 等底层接口。不能调用 `malloc/free/realloc`、`new/delete`、`printf/fprintf/fopen`、`NSLog`、任何 Objective-C 方法、Foundation API、C++ 标准库、异常处理或可能加锁的日志系统。工程上通常在正常运行期预先准备文件路径、mmap 区域和固定大小缓冲区；崩溃时只写入信号编号、故障地址、寄存器和原始 PC 地址；符号化、JSON 拼装、压缩和网络上报都放到下次启动或独立安全阶段完成。
+信号可能在任何指令执行期间打断当前线程，例如线程正在 `malloc`、`printf`、Objective-C runtime 或持锁代码中执行时突然收到 `SIGSEGV`。如果 Signal Handler 再调用同一类非重入函数，就可能再次获取已经持有的锁，造成死锁；也可能操作处于半更新状态的数据结构，造成二次崩溃。因此崩溃现场的 Signal Handler 只能做极少量异步信号安全的工作，例如使用预分配缓冲区、写原始地址、调用 `write()`、`open()`、`close()`、`_exit()`、`sigaction()`、`sigprocmask()` 等底层接口。不能调用 `malloc/free/realloc`、`new/delete`、`printf/fprintf/fopen`、`NSLog`、任何 Objective-C 方法、Foundation API、C++ 标准库、异常处理或可能加锁的日志系统。工程上通常在正常运行期预先准备文件路径、固定大小缓冲区，以及用于 breadcrumbs、页面路径、网络摘要的预映射上下文区域；崩溃时 Crash Report 主体只写入信号编号、故障地址、寄存器和原始 PC 地址等最小现场；符号化、JSON 补全、压缩、网络上报和 mmap 上下文合并都放到下次启动或独立安全阶段完成。
 
 → [崩溃系列知识点](articles/ios-advanced/崩溃/崩溃.md)
 
@@ -4364,7 +4364,7 @@ Mach 异常通过端口和消息传递。异常发生后，内核会构造包含
 <details>
 <summary><b>Q: 崩溃采集系统应该采集哪些信息？为什么通常下次启动再上报？</b></summary>
 
-一份可用于线上定位的崩溃报告至少要包含四类信息。第一类是崩溃本身：异常类型、信号、异常码、故障地址、触发线程、寄存器状态、所有线程的原始调用栈。第二类是符号化所需信息：所有 dyld image 的名称、UUID、加载基址、大小、架构和 slide，因为没有这些信息就无法把地址映射回 dSYM。第三类是环境信息：App 版本、build、bundle id、设备型号、系统版本、前后台状态、内存水位、启动时长、网络状态等。第四类是业务上下文：用户操作面包屑、页面路由、关键接口、实验分组、功能开关、最近日志等。崩溃时立即网络上报成功率很低，因为进程即将终止，运行时和锁状态可能已经损坏；更可靠的做法是在崩溃现场只用异步安全方式把最小必要现场写入本地文件或 mmap，下次启动检测到未上报报告后再解析、压缩、符号化或上传。这样既提高成功率，也避免在崩溃现场做复杂逻辑引发二次崩溃。
+一份可用于线上定位的崩溃报告至少要包含四类信息。第一类是崩溃本身：异常类型、信号、异常码、故障地址、触发线程、寄存器状态、所有线程的原始调用栈。第二类是符号化所需信息：所有 dyld image 的名称、UUID、加载基址、大小、架构和 slide，因为没有这些信息就无法把地址映射回 dSYM。第三类是环境信息：App 版本、build、bundle id、设备型号、系统版本、前后台状态、内存水位、启动时长、网络状态等。第四类是业务上下文：用户操作面包屑、页面路由、关键接口、实验分组、功能开关、最近日志等。崩溃时立即网络上报成功率很低，因为进程即将终止，运行时和锁状态可能已经损坏；更可靠的做法是在崩溃现场只用异步安全方式把最小必要现场写入本地 Crash Report 文件；mmap 更适合在崩溃前作为上下文 ring buffer 持续记录 breadcrumbs、页面路由、关键接口和轻量日志。下次启动检测到未上报报告后，再读取 Crash Report 并合并 mmap 上下文，完成解析、压缩、符号化或上传。这样既提高成功率，也避免在崩溃现场做复杂逻辑引发二次崩溃。
 
 → [崩溃系列知识点](articles/ios-advanced/崩溃/崩溃.md)
 
@@ -4445,7 +4445,7 @@ JetsamEvent 是系统生成的内存强杀快照，`bug_type = 298`，不是单�
 <details>
 <summary><b>Q: Memory Dump 在 OOM 治理中解决什么问题？实现时有哪些关键点？</b></summary>
 
-排除法、MetricKit 和 JetsamEvent 能告诉你"可能发生了 OOM"和"当时占用了多少内存"，但不能直接告诉你"哪段代码分配的对象还活着"。Memory Dump 的目标是在运行期持续记录存活对象及其分配堆栈，内存触顶、收到 Memory Warning、进入后台或达到水位阈值时，把存活对象表、堆栈表、镜像列表和内存上下文落盘，下次启动上报分析。典型实现会 hook `malloc_logger` 和 `__syscall_logger` 捕获 `malloc/calloc/realloc/free`、`vm_allocate/mmap` 等分配释放事件，记录 `ptr -> size -> stack_id`；回调里不能再次 malloc 或调用 Foundation，所以要用无锁 ring buffer、预分配结构和异步处理线程。为降低开销，堆栈只记录原始 PC，离线符号化；存活对象表避免节点级 malloc；大量相似堆栈可做后缀压缩；核心数据通过 mmap 落盘，防止 OOM 瞬间丢失。分析时按类名、对象数、总字节、Top 分配堆栈、Caller1 + Caller2 + Category 聚合，重点找大图、无界缓存、页面泄漏、循环引用和单堆栈大分配。
+排除法、MetricKit 和 JetsamEvent 能告诉你"可能发生了 OOM"和"当时占用了多少内存"，但不能直接告诉你"哪段代码分配的对象还活着"。Memory Dump 的目标是在运行期持续记录存活对象及其分配堆栈，内存触顶、收到 Memory Warning、进入后台或达到水位阈值时，把存活对象表、堆栈表、镜像列表和内存上下文落盘，下次启动上报分析。典型实现会 hook `malloc_logger` 和 `__syscall_logger` 捕获 `malloc/calloc/realloc/free`、`vm_allocate/mmap` 等分配释放事件，记录 `ptr -> size -> stack_id`；回调里不能再次 malloc 或调用 Foundation，所以要用无锁 ring buffer、预分配结构和异步处理线程。为降低开销，堆栈只记录原始 PC，离线符号化；存活对象表避免节点级 malloc；大量相似堆栈可做后缀压缩；核心数据通过预映射文件或 WAL 持续落盘，提高 OOM 后恢复概率，降低用户态缓冲在瞬间被杀时丢失的风险。分析时按类名、对象数、总字节、Top 分配堆栈、Caller1 + Caller2 + Category 聚合，重点找大图、无界缓存、页面泄漏、循环引用和单堆栈大分配。
 
 → [崩溃系列知识点](articles/ios-advanced/崩溃/崩溃.md)
 
