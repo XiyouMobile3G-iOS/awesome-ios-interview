@@ -1,6 +1,6 @@
 # APM-指标体系
 
-APM 的第一步不是写代码，而是**定义指标**。一个 App 的性能好坏不是一句话能说清的，必须把模糊的"快 / 稳 / 省"拆解为可量化、可对比、可报警的数字。本文把业界常用指标按"稳定性 / 流畅性 / 启动 / 资源 / 业务 / 网络"六大族分类，给出每个指标的定义、计算方式、典型目标值与常见陷阱。
+APM 的第一步不是写代码，而是**定义指标**。一个 App 的性能好坏不是一句话能说清的，必须把模糊的"快 / 稳 / 省"拆解为可量化、可对比、可报警的数字。本文把业界常用指标按"稳定性 / 流畅性 / 启动 / 资源 / 业务 / 网络"六大族分类，并补充 RUM 的 `Session / View / Action / Resource / Error` 口径，给出每个指标的定义、计算方式、典型目标值与常见陷阱。
 
 ---
 
@@ -595,12 +595,12 @@ WebView 场景下，需要端侧 SDK 与 H5 页面 JS SDK 联动：
 ```mermaid
 quadrantChart
     title 指标采集优先级
-    x-axis 采集难度 低 --> 高
-    y-axis 业务价值 低 --> 高
-    quadrant-1 必做
-    quadrant-2 战略
-    quadrant-3 选做
-    quadrant-4 低 ROI
+    x-axis: 采集难度 低 --> 高
+    y-axis: 业务价值 低 --> 高
+    quadrant-1: 必做
+    quadrant-2: 战略
+    quadrant-3: 选做
+    quadrant-4: 低 ROI
 
     Crash率: [0.2, 0.95]
     启动耗时: [0.3, 0.9]
@@ -620,7 +620,44 @@ quadrantChart
 
 ---
 
-## 十、指标速查表
+## 十、RUM 指标模型
+
+传统 APM 指标容易按技术模块拆散，例如 Crash、启动、网络、卡顿分别在不同页面。RUM 指标模型的作用是把它们重新组织成真实用户链路。
+
+```text
+Session
+  View
+    Action
+    Resource
+    Error
+    LongTask / Freeze
+```
+
+| 层级 | 核心指标 | 典型问题 |
+|-----|---------|---------|
+| Session | Session 数、Crash-free sessions、异常退出率、平均会话时长 | 一次使用是否完整、是否异常结束 |
+| View | 页面加载 P90、首屏 P90、白屏率、慢页面率 | 哪些页面慢、哪些页面白屏 |
+| Action | 点击响应耗时、关键操作成功率、操作后错误率 | 用户点了以后有没有反应 |
+| Resource | 请求总耗时、DNS/TCP/TLS/TTFB、错误率、慢请求率 | 用户侧接口到底慢在哪里 |
+| Error | Crash、业务错误、JS 错误、网络错误 | 哪些错误影响真实用户 |
+| LongTask / Freeze | 主线程阻塞、帧延迟、卡死率 | 用户是否感知卡住 |
+
+RUM 口径下的指标要尽量带上关联 ID：
+
+```text
+session_id
+view_id
+action_id
+resource_id
+trace_id
+span_id
+```
+
+这样 B 端才能从一个慢请求跳回触发它的页面和操作，从一个 Crash 回看崩溃前的用户路径。
+
+---
+
+## 十一、指标速查表
 
 ```mermaid
 mindmap

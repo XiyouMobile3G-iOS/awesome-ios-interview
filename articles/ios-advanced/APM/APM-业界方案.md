@@ -8,24 +8,24 @@
 
 ```mermaid
 quadrantChart
-    title iOS APM 方案对比
-    x-axis 侵入性 低 --> 高
-    y-axis 能力深度 浅 --> 深
+    title "iOS APM 方案对比"
+    x-axis "低侵入" --> "高侵入"
+    y-axis "浅能力" --> "深能力"
 
-    quadrant-1 专业级
-    quadrant-2 旗舰级
-    quadrant-3 入门级
-    quadrant-4 高性价比
+    quadrant-1 "专业级"
+    quadrant-2 "旗舰级"
+    quadrant-3 "入门级"
+    quadrant-4 "高性价比"
 
     MetricKit: [0.05, 0.45]
     Firebase: [0.15, 0.4]
-    Xcode Organizer: [0.02, 0.35]
+    "Xcode Organizer": [0.02, 0.35]
     Sentry: [0.3, 0.65]
     Bugly: [0.25, 0.5]
-    Matrix (微信): [0.6, 0.88]
-    Slardar (字节): [0.65, 0.95]
-    Hertz (美团): [0.5, 0.8]
-    Alita (阿里 mPaaS): [0.55, 0.85]
+    "Matrix (微信)": [0.6, 0.88]
+    "Slardar (字节)": [0.65, 0.95]
+    "Hertz (美团)": [0.5, 0.8]
+    "Alita (阿里 mPaaS)": [0.55, 0.85]
 ```
 
 ---
@@ -682,4 +682,4 @@ MetricKit
 
 ---
 
-**下一步**：采集、上报、对接方案都搞定了，如何设计大盘、告警和防劣化闭环？见 [APM-可视化与告警](APM-可视化与告警.md)。
+**下一步**：采集、上报、对接方案都搞定了，如何设计大盘、告警和防劣化闭环？见 [APM-B端平台设计](APM-B端平台设计.md)。

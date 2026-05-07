@@ -4305,6 +4305,258 @@ A: 使用协议抽象、泛型、中间件模式，支持请求拦截、响应�
 
 </details>
 
+<details>
+<summary><b>Q: 如何从 0 到 1 实现 APM 系统？</b></summary>
+
+从产品维度讲，APM需要区分C端和B端。C端负责采集用户现场，B端负责分析和处理。
+明确产品形态：C 端 iOS SDK 负责低开销采集真实用户现场，服务端数据平台负责接入、清洗、聚合、存储、符号化、告警和配置下发，B 端平台负责让研发、测试、架构、产品、客服围绕 Issue 完成发现、定位、分发、修复、验证和发布防劣化。
+
+整体架构可以这样拆：
+
+```mermaid
+flowchart TB
+    subgraph Client["C端 iOS App + APM SDK"]
+        API["Public API<br/>start / identify / track / trace"]
+        Core["SDK Core<br/>插件管理 / 上下文 / 采样 / 隐私 / 远程配置"]
+        Plugins["采集插件<br/>Crash / Watchdog / FOOM / FPS / Launch / Network / MetricKit / Business"]
+        Processor["事件处理<br/>标准化 / 脱敏 / 去重 / 分级"]
+        Store["本地队列<br/>Crash文件 / WAL / mmap / SQLite"]
+        Upload["上报器<br/>批量 / 压缩 / 加密 / 重试 / 熔断"]
+    end
+
+    subgraph Server["服务端数据平台"]
+        Gateway["接入网关<br/>鉴权 / 限流 / Schema校验 / 快速ACK"]
+        Queue["消息队列<br/>Kafka / Pulsar"]
+        Clean["清洗补全<br/>PII脱敏 / 维度补全 / 去重"]
+        Stream["实时计算<br/>指标窗口 / Session重建 / 告警输入"]
+        Stores["多模存储<br/>ClickHouse / TSDB / ES / OSS / PostgreSQL"]
+        Symbol["符号化<br/>dSYM / BCSymbolMap / 系统符号"]
+        Issue["Issue聚合<br/>fingerprint / Owner / 状态"]
+        Config["配置服务<br/>采样率 / 阈值 / 插件开关 / 灰度"]
+    end
+
+    subgraph Console["B端治理平台"]
+        Dashboard["质量大盘"]
+        Detail["Issue详情"]
+        Session["用户会话"]
+        Alert["告警中心"]
+        Release["发布防劣化"]
+        Workflow["Owner / 工单 / IM / 报表"]
+    end
+
+    API --> Core --> Plugins --> Processor --> Store --> Upload
+    Upload --> Gateway --> Queue --> Clean --> Stream --> Stores
+    Stores --> Symbol --> Issue
+    Issue --> Dashboard & Detail & Session & Alert & Release & Workflow
+    Config --> Core
+```
+
+第一步是定义指标体系。APM 的核心指标不应该只看平均值，而要按 P50 / P90 / P99、版本、机型、OS、网络、地域、渠道、页面、业务模块切分。稳定性看 `Crash Rate`、`Watchdog Rate`、`FOOM Rate` 和总异常退出率；流畅性看 FPS、掉帧率、卡顿率、Freeze 率；启动看冷启动、温启动、热启动、首屏和 TTI；网络看 DNS、TCP、TLS、TTFB、总耗时、错误率、慢请求率和流量；页面体验看页面加载 P90、秒开率、首屏、白屏率；资源看内存峰值、CPU、磁盘 IO、电量和热状态。稳定性面向管理层可以汇总成：
+
+```text
+Abnormal Exit Rate = Crash Rate + Watchdog Rate + FOOM Rate
+Crash-free Users = 1 - crashed_users / active_users
+Slow Resource Rate = slow_resource_count / total_resource_count
+View Blank Rate = blank_view_count / total_view_count
+```
+
+第二步是设计 C 端 SDK。SDK 是数据质量的入口，但它和业务 App 共进程，所以原则是低开销、可控制、可降级、可追责、可合规。架构上要插件化，而不是一个巨大单例：
+
+```swift
+protocol APMPlugin {
+    var name: String { get }
+    var defaultEnabled: Bool { get }
+
+    func start(context: APMContext, config: APMPluginConfig)
+    func stop()
+    func update(config: APMPluginConfig)
+}
+```
+
+SDK Core 负责初始化、生命周期、远程配置、插件调度、自监控；Context Manager 负责 `app_id`、`release`、`build`、`device_id`、`user_id`、`session_id`、`view_id`、`action_id`、`resource_id`、`trace_id`、`span_id`、`event_id` 等上下文；Event Processor 负责标准化、脱敏、采样、去重和优先级；Local Store 负责分级落盘；Uploader 负责批量、压缩、加密、重试、幂等和熔断。
+
+初始化要拆成极早期和延后阶段。Crash handler、上次运行状态、最小上下文、本地配置可以尽早启动；FPS、网络 hook、历史包扫描、批量上报、MemoryGraph 这类有开销的能力要放到首帧后或空闲时启动。SDK 本身也要被监控，例如初始化耗时、队列大小、丢弃数、上报失败率、禁用插件列表、SDK 自身 Crash 率。
+
+第三步是落地核心采集能力。Crash 要同时覆盖 Mach Exception、Unix Signal、NSException / C++ terminate。崩溃现场环境不安全，只能做 async-signal-safe 的最小写入，不能 `malloc`、不能 Objective-C / Swift 调用、不能网络请求、不能符号化，下次启动再转换成标准事件上报。Mach 端口注册时要保存旧 handler 并转发，避免破坏 Bugly、Sentry 等其它 SDK。
+
+```c
+void crash_handler(int sig, siginfo_t *info, void *ucontext) {
+    static char buffer[65536];
+    int fd = open("/path/to/apm_crash.log", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+    write_header(fd, buffer, sig, info);
+    write_thread_states(fd);
+    write_backtraces(fd);
+    write_image_infos(fd);
+
+    fsync(fd);
+    close(fd);
+    raise(sig);
+}
+```
+
+Watchdog 和卡死不能只抓一次堆栈。推荐用 RunLoop Observer + 子线程 Ping 检测主线程长时间停留在 `beforeSources` 或 `afterWaiting`，触发后每 500ms 多次采样主线程栈，并记录线程状态、CPU 占用、最近页面、最近操作、网络和磁盘现场。服务端再聚合多次采样，找出现频率最高或阻塞时间最长的关键栈帧。死锁场景可以扫描等待锁的线程，解析锁拥有者 tid，构建“等待 -> 持有”的有向图并找环。
+
+FOOM 没有系统回调，要用排除法。每次启动保存上次运行状态，包括版本、OS、机型、是否前台、是否 Crash、是否正常退出、电量、内存水位、时间戳。下次启动时，如果上次没有 Crash、没有正常退出、不是升级、不是系统重启、不是电量耗尽，并且上次处于前台，就判定疑似 FOOM。FOOM 详情没有崩溃栈，所以必须保存内存水位、页面路径、大对象 TopN、机型内存档位和 MetricKit memory diagnostics。
+
+```swift
+struct LastState: Codable {
+    var appVersion: String
+    var osVersion: String
+    var deviceModel: String
+    var isForeground: Bool
+    var didCrash: Bool
+    var didExitNormally: Bool
+    var batteryLevel: Float
+    var memoryPressure: Int
+    var timestamp: TimeInterval
+}
+
+func suspectedFOOM(last: LastState, current: LastState) -> Bool {
+    if last.didCrash || last.didExitNormally { return false }
+    if last.appVersion != current.appVersion { return false }
+    if last.osVersion != current.osVersion { return false }
+    if last.batteryLevel < 0.02 { return false }
+    return last.isForeground
+}
+```
+
+卡顿和 FPS 用 `CADisplayLink`、RunLoop Observer、主线程堆栈采样实现。ProMotion 机型要注意自适应刷新率，静止页面低 FPS 不一定是卡顿，应区分 FPS、掉帧、单帧耗时和滚动场景。启动采集要拆 Pre-main、`main -> didFinishLaunching`、首屏、可交互，最终面向用户更应看首屏和 TTI。网络采集优先用 `URLSessionTaskMetrics` 拿 DNS、TCP、TLS、TTFB、download、total 分段耗时；如果要拦截内容可用 `NSURLProtocol`，但要防重复拦截；WKWebView 走 WebContent 进程，需要注入 JS SDK 采集 Navigation Timing、Resource Timing、Paint 和 Long Task。MetricKit 必接，作为低开销系统基线，但它缺少业务上下文，不能替代实时 SDK。
+
+第四步是统一 RUM 数据模型和上报协议。不要让 Crash、网络、页面、卡顿各自孤立上报，而要用 RUM 把用户链路串起来：
+
+```text
+Application
+  Release / Build / Environment
+    User / Anonymous Device
+      Session
+        View
+          Action
+          Resource
+          Error
+          LongTask / Freeze
+          Custom Event
+```
+
+所有事件外层都用统一 envelope，payload 按事件类型扩展。`event_id` 用于幂等去重，重试时不能变化；`event_time` 是端侧时间，服务端写入 `receive_time`；`schema_version` 用来支撑长期演进。
+
+```json
+{
+  "schema_version": "1.0",
+  "event_id": "01HZY2...",
+  "event_type": "resource",
+  "event_time": 1715000000123,
+  "app": {
+    "app_id": "com.example.app",
+    "env": "prod",
+    "release": "3.2.1",
+    "build": "3020100",
+    "sdk_version": "2.5.0"
+  },
+  "device": {
+    "model": "iPhone15,2",
+    "os_version": "17.5",
+    "network_type": "wifi",
+    "region": "CN-SH"
+  },
+  "identity": {
+    "device_id": "anon_xxx",
+    "user_id": "hash_xxx"
+  },
+  "rum": {
+    "session_id": "s_123",
+    "view_id": "v_456",
+    "action_id": "a_789",
+    "resource_id": "r_001",
+    "trace_id": "t_abc",
+    "span_id": "sp_def"
+  },
+  "payload": {
+    "method": "POST",
+    "url_template": "/api/order",
+    "status_code": 500,
+    "duration_ms": 3200,
+    "ttfb_ms": 2100
+  }
+}
+```
+
+上报链路要先落盘再上传，按数据价值分 Critical、Important、Sampled、Debug。Crash、Watchdog、FOOM 尽量全量并可靠落盘；网络错误、慢请求、核心页面性能较高采样；普通 FPS、CPU、资源请求低采样；MemoryGraph、Coredump、Zombie 只灰度或触发式开启。稳定采样要按设备或用户 hash，而不是每条事件随机，否则一个用户的页面、网络、错误会被切碎。
+
+```swift
+func sampled(deviceId: String, key: String, rate: Double, day: String) -> Bool {
+    let seed = "\(deviceId)-\(key)-\(day)"
+    let hash = UInt64(seed.hashValue.magnitude)
+    return Double(hash % 10_000) / 10_000.0 < rate
+}
+```
+
+上传协议可以用 protobuf + gzip / zstd + HTTPS，带 App、SDK、Schema、Package、Signature。失败重试用指数退避和 jitter；4xx schema 错误不重试，401 / 403 刷新配置或停传，413 拆包，429 遵守 `Retry-After`，5xx 重试。APM 自身请求、文件和线程都要打白名单，防止网络、磁盘、CPU 监控产生回环。
+
+第五步是设计服务端数据平台。接入网关只做轻逻辑，包括鉴权、限流、解压解密、Schema 校验、大小限制、租户隔离、时间校正和快速 ACK，然后写 Kafka / Pulsar。清洗层做 decode、PII 脱敏、normalize、维度补全、去重和路由；维度补全包括 IP 到地域运营商、机型到性能档位、版本到 Git commit 和灰度批次、URL 到 path template 和接口 owner、栈帧到模块和团队。
+
+存储不能只靠 MySQL。明细事件和多维聚合适合 ClickHouse / Doris，指标时序适合 TSDB，堆栈和错误文本适合 Elasticsearch / OpenSearch，dSYM、原始包、MemoryGraph、Coredump 适合对象存储，项目配置、权限、Issue 元数据适合 PostgreSQL / MySQL，热点缓存和限流适合 Redis。
+
+```sql
+CREATE TABLE rum_events (
+    app_id LowCardinality(String),
+    env LowCardinality(String),
+    release LowCardinality(String),
+    event_date Date,
+    event_time DateTime64(3),
+    event_type LowCardinality(String),
+    event_id String,
+    session_id String,
+    view_id String,
+    action_id String,
+    resource_id String,
+    trace_id String,
+    user_id String,
+    device_model LowCardinality(String),
+    os_version LowCardinality(String),
+    network_type LowCardinality(String),
+    name String,
+    duration_ms UInt32,
+    status_code UInt16,
+    error_type LowCardinality(String),
+    fingerprint String,
+    payload_json String
+) ENGINE = MergeTree
+PARTITION BY (app_id, event_date)
+ORDER BY (app_id, event_type, release, event_time, session_id);
+```
+
+符号化服务要由 CI 自动上传 dSYM、BCSymbolMap 和源码版本，按 `release + build + UUID` 绑定。客户端上报 image UUID、slide、PC address、architecture、OS version，服务端用 `atos` 或 `llvm-symbolizer` 符号化，支持 Swift demangle、系统符号库和历史重符号化。没有 dSYM 的 Crash 平台只能统计，不能真正定位。
+
+Issue 聚合是治理的最小单元。平台不应该把每条 Crash 都丢给研发，而要按 fingerprint 聚成 Crash Issue、Watchdog Issue、FOOM Issue、慢页面 Issue、慢接口 Issue、JS Error Issue。Crash fingerprint 可以用异常类型、signal、崩溃线程标记、前几个 in-app frame；Watchdog 可以用多次采样公共栈和阻塞类型；慢接口可以用 host、path template、status / error；FOOM 可以用页面、内存峰值特征、机型档位和模块特征。Issue 还要维护状态、Owner、影响用户、趋势、首现版本、最近版本、样本事件、关联 Session、修复版本和重复 / 噪声标记。
+
+第六步是做 B 端治理平台。B 端不是把数据画成图，而是服务工作流。首页只放能代表用户体验和发布风险的指标，例如 Crash-free users、异常退出率、启动 P90 / P99、页面秒开率、白屏率、卡顿率、网络错误率、慢请求率、新版本劣化项、Top Issue。所有异常项都要一键下钻到 Issue、Session、版本、机型、页面或接口。
+
+Issue 详情页要回答“影响多少人、从什么时候开始、在哪些版本机型页面发生、疑似原因是什么、谁负责、修复后是否恢复”。Session 页要按时间线串起页面、操作、网络、错误和长任务，例如：
+
+```text
+10:01:02  Session Start  cold_launch
+10:01:03  View Home appear
+10:01:04  Resource GET /home 340ms 200
+10:01:08  Action tap_product
+10:01:09  View ProductDetail appear
+10:01:10  Resource GET /product/{id} 1.2s 200
+10:01:12  LongTask main 680ms
+10:01:15  Action tap_buy
+10:01:16  Resource POST /order 3.2s 500
+10:01:17  Error EXC_BAD_ACCESS
+```
+
+告警要少而准，可行动。规则可以分绝对阈值、环比、变点、TopN、SLO 和灰度拦截，但告警内容必须包含发生了什么、影响多少用户、从什么时候开始、影响哪些版本 / 机型 / 地区、疑似 Top 维度、Owner 和下一步入口。要做同 Issue 合并、静默窗口、升级策略、恢复通知和误报反馈。不可行动的指标只进报表，不进告警。
+
+发布防劣化是 APM 的高价值场景。灰度阶段要用同时间窗口、同机型、同 OS、同网络、同地域、同渠道做新旧版本对照，门禁指标包括 Crash-free users、FOOM rate、Watchdog rate、Launch P90、View slow rate、Network error rate、关键路径成功率。指标显著劣化时暂停放量，通知 Release Owner，给出 Top Issue、Top 指标和疑似 commit。
+
+最后是落地路线。L1 先“能看到”，接入 MetricKit、Crash、启动、基础网络错误和最小质量大盘；L2 “覆盖完整”，补 Watchdog、FOOM、卡顿、页面耗时、业务 Trace 和 RUM ID；L3 “能归因”，建设符号化、Issue 聚类、Session 时间线、共性维度、主线程采样和火焰图；L4 “能闭环”，接入 Owner、工单、IM、告警、修复版本和灰度验证；L5 “能治理”，做 SLO、发布门禁、自动拦截、质量报表和业务结果关联。
+
+这套系统最容易失败的点有四个。第一，指标口径不统一，只采技术点，没有 RUM 关联 ID，导致 B 端无法还原用户故事。第二，SDK 过重，Hook、高频采样、写盘、上报把 App 自己拖慢，所以必须远程配置、灰度、熔断和自监控。第三，服务端只存原始日志，没有实时聚合、符号化、Issue 聚类和多模存储，导致查不快、告不准、无法重放。第四，B 端只有看板，没有 Owner、告警、工单、修复验证和发布门禁，最后没人真正治理。
+
+</details>
+
 ### 崩溃治理
 
 <details>

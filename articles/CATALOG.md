@@ -129,12 +129,15 @@
 
 | 文章 | 描述 |
 |------|------|
-| [APM](ios-advanced/APM/APM.md) | APM 体系总览：目标、架构、选型、演进路线 |
-| [APM-指标体系](ios-advanced/APM/APM-指标体系.md) | 稳定性/流畅性/启动/资源/网络/业务/H5 指标族与目标值 |
-| [APM-数据采集](ios-advanced/APM/APM-数据采集.md) | Hook/MetricKit/Signal/Backtrace 等采集技术实现 |
-| [APM-数据上报](ios-advanced/APM/APM-数据上报.md) | 采样、聚合、批量、重试、合规与鲁棒性 |
+| [APM](ios-advanced/APM/APM.md) | APM/RUM 体系总览：B/C 端边界、技术分层与建设路线 |
+| [APM-产品与架构设计](ios-advanced/APM/APM-产品与架构设计.md) | 产品架构、角色视图、C 端体验与 B 端治理闭环 |
+| [APM-指标体系](ios-advanced/APM/APM-指标体系.md) | 稳定性/流畅性/启动/资源/网络/业务/RUM 指标族与目标值 |
+| [APM-C端SDK架构](ios-advanced/APM/APM-C端SDK架构.md) | 插件化 SDK、远程配置、采样、隐私、低开销与防自崩 |
+| [APM-数据采集](ios-advanced/APM/APM-数据采集.md) | Crash、Watchdog、FOOM、卡顿、启动、网络、MetricKit 等采集技术 |
+| [APM-数据模型与上报](ios-advanced/APM/APM-数据模型与上报.md) | RUM 事件模型、ID 体系、本地队列、批量上报、重试与脱敏 |
+| [APM-服务端数据架构](ios-advanced/APM/APM-服务端数据架构.md) | 接入网关、消息队列、实时计算、存储、符号化、Issue 聚合与配置下发 |
+| [APM-B端平台设计](ios-advanced/APM/APM-B端平台设计.md) | 大盘、详情页、用户会话、告警、发布防劣化、SDK 配置与权限 |
 | [APM-业界方案](ios-advanced/APM/APM-业界方案.md) | MetricKit/Sentry/Firebase/Bugly/Matrix/Slardar/Hertz/mPaaS 深度剖析 |
-| [APM-可视化与告警](ios-advanced/APM/APM-可视化与告警.md) | 大盘、归因、告警、分发与防劣化闭环 |
 
 ### 架构设计
 
@@ -267,4 +270,3 @@
 | 文章 | 描述 |
 |------|------|
 | [经典算法](leetcode/经典算法.md) | iOS面试常见算法题 |
-
