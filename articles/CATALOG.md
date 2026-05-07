@@ -88,7 +88,6 @@
 | [崩溃-治理](ios-advanced/崩溃/崩溃-治理.md) | 崩溃治理策略与实践 |
 | [崩溃日志解读](ios-advanced/崩溃/崩溃日志解读.md) | `.ips` 双段 JSON、Exception Type 与 Termination Namespace、寄存器与符号化实战 |
 | [JetsamEvent日志解读](ios-advanced/崩溃/JetsamEvent日志解读.md) | JetsamEvent `.ips` 字段、`reason` 类型、机型阈值矩阵与解析脚本 |
-| [面试题](ios-advanced/崩溃/面试题.md) | 25道崩溃高频面试题，涵盖原理、符号化、采集、治理、OOM、日志解读六大方向 |
 
 ### 死锁治理
 
