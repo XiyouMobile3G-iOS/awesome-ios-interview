@@ -4758,16 +4758,6 @@ Energy = Power \times Time
 - **Time**：这个硬件模块保持活跃的时间。
 - **Energy**：这段时间内真正消耗的总能量。
 
-App 层通常拿不到精确的电压、电流曲线，所以线上治理不会直接用电流建模，而是通过 MetricKit、自建采样和场景埋点，间接观察 **CPU 时间、后台时长、网络流量、最高精度定位时长、屏幕亮度、热状态** 等指标。
-
-更工程化的能耗模型可以写成：
-
-\[
-Energy_{total} = \sum_{module} Time_{active,module} \times Power_{module}
-\]
-
-也就是说，总耗电可以近似看成各个硬件模块的 **活跃时间 × 平均功率** 的累加。MetricKit 中很多指标之所以是"累计时间"，比如 `cumulativeCPUTime`、`cumulativeBackgroundTime`、`cumulativeBestAccuracyTime`，本质上就是在帮助我们估算不同模块的活跃成本。
-
 所以耗电优化最终都逃不开三件事：
 
 | 方向 | 本质 | 例子 |
@@ -4919,24 +4909,36 @@ App 可以通过 `ProcessInfo.processInfo.isLowPowerModeEnabled` 检测，并主
 
 治理的第一步是量化。没有指标，就只能靠主观体感判断"好像比较耗电"。
 
-线下可以用 Xcode Energy Gauge、Instruments Energy Log、Time Profiler、Network Instruments 找单机热点；线上可以用 MetricKit 作为主数据源，再补充电量采样、热状态、CPU 采样和业务场景埋点。
+线下可以用 Xcode Energy Gauge、Instruments、Time Profiler、Network Instruments 找单机热点；线上通常分两层：
 
-| 维度 | 关键指标 | 作用 |
+1. **MetricKit 天级大盘**：看 CPU、GPU、后台、网络、定位、屏幕亮度、诊断异常等系统级累计指标。
+2. **自建实时采集体系**：补充 MetricKit 的延迟和场景粒度，记录电量窗口、CPU 实时采样、Thermal / Low Power 事件、网络请求、定位生命周期、音视频/相机/传感器生命周期。
+
+MetricKit 适合回答"这个版本整体有没有劣化"，自建采集适合回答"哪个页面、哪个功能、哪个后台任务正在耗电"。
+
+| 层级 | 关键指标 | 作用 |
 | --- | --- | --- |
-| CPU | `cumulativeCPUTime`、CPU Exception | 判断是否有高频计算、死循环、Timer 空转、锁竞争 |
-| 后台 | `cumulativeBackgroundTime`、后台定位/音频时长 | 判断后台任务是否按预算收敛 |
-| 网络 | 蜂窝/WiFi 上传下载量、请求次数、重试次数 | 判断是否有小请求过多、弱网重试风暴、心跳过密 |
-| 定位 | `cumulativeBestAccuracyTime`、定位开启次数、后台定位占比 | 判断是否存在高精度持续定位 |
-| 屏幕/GPU | `averagePixelLuminance`、GPU Time、帧率 | 判断大面积高亮 UI、持续动画、渲染负载 |
-| 热状态 | `thermalState` serious/critical 次数 | 判断设备是否长期处于高功耗压力下 |
+| 系统大盘 | `cumulativeCPUTime`、`cumulativeGPUTime`、`cumulativeBackgroundTime`、蜂窝/WiFi 流量、`cumulativeBestAccuracyTime`、`averagePixelLuminance` | 建立版本、机型、系统维度的耗电基线 |
+| 异常诊断 | CPU Exception、Hang、Disk Write Exception、Thermal serious+ | 发现高 CPU、卡死、磁盘写入超限、发热等高风险问题 |
+| 电量窗口 | 前台/后台/场景掉电速率，例如 `% / hour` | 衡量用户真实感知的掉电速度 |
+| CPU 实时采样 | 1~5 秒采样、窗口平均 CPU、持续高 CPU 事件、触发式堆栈 | 捕获 MetricKit 无法实时发现的 CPU 空转、死循环、后台高 CPU |
+| 网络埋点 | 请求数、失败数、重试数、蜂窝/WiFi 流量、接口维度、网络类型 | 判断小请求过多、弱网重试风暴、蜂窝流量异常 |
+| 定位埋点 | `start/stop`、精度、前后台、`activityType`、持续时长 | 判断高精度定位、后台定位、生命周期未收敛 |
+| 硬件生命周期 | 音视频、相机、传感器、模型推理等能力的开始/结束、参数、耗时 | 识别高功耗能力长驻或参数过高 |
 
-量化时要建立 **基线、阈值和分位数**，而不是只看 App 级平均值。比如：
+量化时不能只看累计值，要做归一化和分位数：
 
-- 新版本相对上一稳定版本 `cumulativeCPUTime` 上涨多少算劣化。
-- 后台活跃时长超过多少需要告警。
-- 最高精度定位累计时长超过多少属于异常。
-- P95/P99 用户的耗电指标是否明显差于中位数用户。
-- 低端机、老系统、蜂窝网络用户是否有额外劣化。
+| 指标 | 推荐口径 |
+| --- | --- |
+| CPU 强度 | `CPU 秒 / 前台小时`，同时看 P50/P95/P99 |
+| 后台强度 | `后台秒 / DAU` 或 `后台秒 / 后台用户` |
+| 蜂窝流量强度 | `蜂窝 MB / 前台小时` |
+| 高精度定位强度 | `高精度定位秒 / 定位用户` |
+| 前台掉电速率 | `电量下降百分比 / 前台小时` |
+| 后台掉电速率 | `电量下降百分比 / 后台小时` |
+| Thermal 升级率 | `serious/critical 用户数 / DAU` |
+
+自建采集要控制成本，避免监控本身变成耗电来源。一般是：电量普通场景 3~5 分钟采一次，重点场景 60~120 秒；CPU 普通场景 5 秒采一次，高风险场景 1 秒；Thermal 和 Low Power 用系统通知；网络、定位、音视频、相机、传感器用统一封装做 `start/stop` 生命周期埋点；本地 30~60 秒聚合后批量上报。
 
 这一步的目标不是马上修问题，而是把"耗电高"变成可比较、可告警、可下钻的指标体系。
 
@@ -4958,12 +4960,12 @@ App 可以通过 `ProcessInfo.processInfo.isLowPowerModeEnabled` 检测，并主
 
 | 异常现象 | 优先怀疑方向 | 典型证据 |
 | --- | --- | --- |
-| CPU 时间上涨 | 高频计算、Timer、轮询、死循环、锁竞争 | Time Profiler 堆栈、CPU 采样、线程状态 |
-| 后台时长上涨 | 后台任务未结束、后台定位、后台音频、Silent Push | `cumulativeBackgroundTime`、后台场景埋点 |
-| 蜂窝流量上涨 | 请求过多、重试风暴、心跳过密、预加载过度 | 请求次数、重试次数、蜂窝上传下载量 |
-| 高精度定位时长上涨 | 定位精度过高、生命周期未收敛、后台持续定位 | `cumulativeBestAccuracyTime`、定位开启/停止日志 |
-| Thermal 变差 | CPU/GPU 长时间高负载、相机/音视频/AR 长驻 | `thermalState`、GPU/CPU 指标、页面场景 |
-| 用户反馈后台耗电 | 后台任务、定位、音频、网络同步、蓝牙扫描 | 前后台切换日志、后台能力使用记录 |
+| CPU 时间上涨 | 高频计算、Timer、轮询、死循环、锁竞争 | MetricKit CPU、实时 CPU 采样、触发式堆栈、Time Profiler |
+| 后台时长上涨 | 后台任务未结束、后台定位、后台音频、Silent Push | `cumulativeBackgroundTime`、后台任务日志、后台能力生命周期 |
+| 蜂窝流量上涨 | 请求过多、重试风暴、心跳过密、预加载过度 | 蜂窝流量、请求密度、重试率、接口 TopN |
+| 高精度定位时长上涨 | 定位精度过高、生命周期未收敛、后台持续定位 | `cumulativeBestAccuracyTime`、定位 `start/stop`、精度和前后台字段 |
+| Thermal 变差 | CPU/GPU 长时间高负载、相机/音视频/AR/模型推理长驻 | Thermal 事件、CPU/GPU 指标、硬件生命周期、页面场景 |
+| 用户反馈后台耗电 | 后台任务、定位、音频、网络同步、蓝牙扫描 | 前后台切换日志、后台掉电窗口、后台能力使用记录 |
 
 比如发现"新版本耗电上涨"，不能停留在 App 整体指标上，要继续追问：
 
@@ -5056,7 +5058,7 @@ func canRunNonCriticalWork() -> Bool {
 | 架构约束 | 建统一 Timer 调度器、网络客户端、定位服务、后台任务调度器、EnergyPolicy 中心 |
 | Code Review | 检查 Timer 生命周期、QoS、轮询、后台任务成对结束、定位精度、网络批量和退避 |
 | 测试卡口 | 用 XCTest 指标做 CPU/耗时基线；真机验证低电量、弱网、过热、长后台等极端场景 |
-| 线上监控 | MetricKit + 自建采样 + 场景埋点，按版本/机型/场景看趋势和 Top 问题 |
+| 线上监控 | MetricKit + 自建实时采集 + 生命周期埋点，按版本/机型/场景看趋势和 Top 问题 |
 | 灰度 SLO | 新版本 CPU、后台时长、定位时长、Thermal、耗电反馈劣化超过阈值就暂停扩量 |
 | 常态运营 | 每版本输出耗电报告，定期治理 Top CPU 堆栈、Top 高耗电页面和高风险后台能力 |
 
