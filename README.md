@@ -3543,6 +3543,52 @@ Swift 的默认访问级别是 `internal`，其定义就是"模块内可见"。�
 </details>
 
 <details>
+<summary><b>Q: Swift 中 Copy-on-Write 的底层原理是什么？</b></summary>
+
+
+Copy-on-Write（写时拷贝，COW）是 Swift 为了在**值语义**和**性能**之间取得平衡而采用的重要优化。按照值语义，`Array`、`Dictionary`、`Set` 这类值类型在赋值后应该彼此独立；但如果每次赋值都立刻深拷贝整份数据，大数组、大字典的成本会非常高。COW 的思路是：**赋值时先共享底层存储，真正发生修改时再拷贝**。
+
+以数组为例：
+
+```swift
+var array1 = [1, 2, 3, 4, 5]
+var array2 = array1      // 此时不深拷贝，array1 和 array2 共享底层存储
+
+array2.append(6)         // 修改 array2 时才触发拷贝
+```
+
+表面上 `array1` 和 `array2` 都是值类型变量，但标准库集合通常不是把所有元素都直接塞进栈上的变量本身。更接近真实情况的是：外层的 `Array` 是一个很小的结构体，里面保存指向堆上 buffer/storage 的引用，以及元素数量、容量等元信息。赋值时复制的是这个小结构体，因此两个数组变量暂时指向同一块堆存储。
+
+当执行 `append`、`remove`、下标赋值等修改操作时，集合会先检查底层存储是否被多个变量共享。简化实现类似：
+
+```swift
+struct MyArray<Element> {
+    private var storage: ArrayStorage<Element>
+
+    mutating func append(_ element: Element) {
+        if !isKnownUniquelyReferenced(&storage) {
+            storage = storage.copy()
+        }
+
+        storage.append(element)
+    }
+}
+```
+
+`isKnownUniquelyReferenced(&storage)`：它用来判断某个 class 实例形式的底层存储是否只有当前这一个强引用。如果是唯一引用，说明没有其他值共享这块 buffer，可以直接原地修改；如果不是唯一引用，说明还有其他变量也看着同一份数据，必须先复制一份新的 storage，再在新 storage 上执行修改。
+
+所以 COW 的执行过程可以概括为四步：
+
+1. **创建变量**：`array1` 持有一块堆上的底层 buffer。
+2. **赋值复制**：`array2 = array1` 只复制外层结构体，底层 buffer 仍然共享。
+3. **修改前检查**：`array2.append` 进入 `mutating` 方法，检查 storage 是否唯一引用。
+4. **必要时拷贝**：如果 storage 被共享，先复制 buffer；如果 storage 唯一，直接原地修改。
+
+→ [值类型和引用类型的区别](articles/ios-basics/值类型和引用类型的区别.md)
+
+</details>
+
+<details>
 <summary><b>Q: Swift 宏解决的核心问题是什么？为什么说它是 Swift 元编程能力的一次补齐？</b></summary>
 
 Swift 宏解决的是**编译期代码生成**问题：让开发者可以在源码层面声明一段"会生成 Swift 代码的代码"，由编译器在类型检查前展开成真正的 Swift 源码，再继续走正常的类型检查、SIL 生成和优化流程。
