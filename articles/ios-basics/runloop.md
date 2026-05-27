@@ -20,7 +20,6 @@ void CFRunLoopRun() {
 - 每个线程都有唯一对应的 RunLoop 对象
 - 主线程和子线程的 RunLoop 都采用懒加载机制，在第一次获取时才创建
 - 主线程的 RunLoop 由 `UIApplicationMain` 内部首次获取并启动（调用链：`UIApplicationMain` → `GSEventRunModal` → `CFRunLoopRunSpecific`）
-- 子线程的 RunLoop 需要手动获取并启动，否则不会创建
 - RunLoop 与线程是一一对应的，存储在一个全局字典（`__CFRunLoops`）中
 
 ```objc
@@ -1063,7 +1062,6 @@ static void runLoopObserverCallback(CFRunLoopObserverRef observer, CFRunLoopActi
 - 每个线程都有唯一对应的 RunLoop 对象
 - 主线程和子线程的 RunLoop 都采用懒加载机制，在第一次获取时才创建
 - 主线程的 RunLoop 由 `UIApplicationMain` 内部首次获取并启动（调用链：`UIApplicationMain` → `GSEventRunModal` → `CFRunLoopRunSpecific`）
-- 子线程的 RunLoop 需要手动获取并启动，否则不会创建
 - RunLoop 与线程是一一对应的，存储在一个全局字典（`__CFRunLoops`）中
 - RunLoop 在第一次获取时创建，在线程结束时销毁
 

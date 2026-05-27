@@ -61,25 +61,6 @@ Pre-main 阶段由 dyld（动态链接器）负责，从用户点击 App 图标�
 </details>
 
 <details>
-<summary><b>Q: dyld 3/4 有哪些优化？</b></summary>
-
-
-**dyld 3 在 iOS 13 引入 Launch Closure**：
-- **首次启动**：分析 Mach-O、计算依赖、生成 Launch Closure 并缓存到磁盘
-- **后续启动**：直接读取缓存，跳过分析步骤
-
-Launch Closure 包含：依赖的动态库列表、Rebase/Bind 信息、初始化顺序
-
-**dyld 4（iOS 15）进一步优化**：
-- **Chained Fixups**：链式修复技术，减少需要修复的指针数量
-- **Page-in Linking**：按需加载，只有访问到某个页面时才进行修复
-- **改进的 Swift 运行时支持**：更好地支持 Swift 类型元数据和协议一致性检查
-
-→ [App启动流程](articles/ios-basics/App启动流程.md)
-
-</details>
-
-<details>
 <summary><b>Q: 如何测量和监控 iOS 应用的启动时间？</b></summary>
 
 
@@ -415,13 +396,21 @@ parentView.addSubview(childView)
 ### RunLoop
 
 <details>
+<summary><b>Q: RunLoop 的作用</b></summary>
+
+RunLoop 是 iOS/macOS 中用于管理线程的事件循环机制。它的核心作用是让线程在有任务时处理任务，没有任务时进入休眠状态，从而避免线程退出并节省 CPU 资源。
+
+→ [RunLoop](articles/ios-basics/runloop.md)
+
+</details>
+
+<details>
 <summary><b>Q: RunLoop 和线程的关系？</b></summary>
 
 
 - 每个线程都有唯一对应的 RunLoop 对象
 - 主线程和子线程的 RunLoop 都采用懒加载机制，在第一次获取时才创建
 - 主线程的 RunLoop 由 `UIApplicationMain` 内部首次获取并启动（调用链：`UIApplicationMain` → `GSEventRunModal` → `CFRunLoopRunSpecific`）
-- 子线程的 RunLoop 需要手动获取并启动，否则不会创建
 - RunLoop 与线程是一一对应的，存储在一个全局字典（`__CFRunLoops`）中
 - RunLoop 在第一次获取时创建，在线程结束时销毁
 
@@ -739,38 +728,192 @@ KVO 的底层实现基于 **isa-swizzling** 机制。
 <summary><b>Q: Objective-C 中的 Block 是函数指针还是对象？底层是怎么实现的？</b></summary>
 
 
-Block 是一个 **OC 对象**，而不是简单的函数指针。它的底层是一个包含 `isa` 指针和函数指针的 C 结构体，继承链为 `__NSGlobalBlock__` → `__NSGlobalBlock` → `NSBlock` → `NSObject`。
+Block **本质是 OC 对象，不是普通函数指针**。更准确地说，Block 是一个带有 `isa` 的 C 结构体对象，结构体内部保存了一个函数指针 `FuncPtr`，同时还保存了捕获的上下文变量。也就是说，Block 是“对象形式包装的函数指针 + 上下文”。
 
 **底层结构：**
 
-编译器将 Block 表达式转换为以下结构（简化版）：
+Block 在编译期会被转换成两个层次：
 
 ```c
+// 所有 Block 共有的对象头
 struct __block_impl {
-    void *isa;         // 指向 Block 的类对象
+    void *isa;         // 指向具体 Block 类，说明 Block 是 OC 对象
     int Flags;
     int Reserved;
-    void *FuncPtr;     // 指向 Block 执行代码的函数指针
+    void *FuncPtr;     // 指向 Block 代码体对应的 C 函数
+};
+
+// 某一个具体 Block 表达式生成的完整结构体
+struct __main_block_impl_0 {
+    struct __block_impl impl;         // 通用对象头
+    struct __main_block_desc_0 *Desc; // Block 大小、copy/dispose 等描述信息
+    int a;                            // 当前 Block 捕获的变量
 };
 ```
 
-Block 的代码体被提取为独立的 C 函数，捕获的外部变量以值拷贝方式存储在结构体内部。
+例如：
 
-**三种类型：**
+```objc
+int a = 10;
+void (^block)(void) = ^{
+    NSLog(@"%d", a);
+};
+```
 
-| 类型 | 存储位置 | 触发条件 |
-|------|---------|---------|
-| `__NSGlobalBlock__` | 数据区 | 没有捕获外部变量 |
-| `__NSStackBlock__` | 栈 | 捕获了外部变量，未被 copy |
-| `__NSMallocBlock__` | 堆 | 对栈 Block 执行了 copy |
+编译后大致会变成：
 
-**`__block` 修饰符原理：**
+```c
+static void __main_block_func_0(struct __main_block_impl_0 *__cself) {
+    int a = __cself->a;
+    NSLog(@"%d", a);
+}
+```
 
-`__block` 修饰的变量会被编译器包装成 `__Block_byref` 结构体，内含 `__forwarding` 指针。当 Block 从栈拷贝到堆时，`__block` 变量也被拷贝，栈上的 `__forwarding` 重定向到堆上的副本，保证修改的一致性。
+调用 `block()` 时，实际是取出结构体中的 `FuncPtr` 并调用，同时把 Block 自身作为第一个参数传进去，所以函数内部可以通过 `__cself` 访问捕获变量。
 
-**循环引用：**
+Block 作为对象的继承链大致为：
 
-当 self 强引用 Block、Block 又捕获 self 时形成循环引用。解决方案是使用 `__weak typeof(self) weakSelf = self`，在 Block 内部再用 `__strong` 确保执行期间不被释放。判断原则：只有 self 直接或间接持有 Block 时才需要关注循环引用。
+```text
+__NSGlobalBlock__ / __NSStackBlock__ / __NSMallocBlock__
+    → __NSGlobalBlock / __NSStackBlock / __NSMallocBlock
+    → NSBlock
+    → NSObject
+```
+
+因此 Block 可以响应 `copy`、`class`、`description` 等对象消息。
+
+**三种 Block 类型：**
+
+| 类型 | isa 指向 | 存储位置 | 典型场景 | copy 行为 |
+|------|---------|---------|---------|----------|
+| `__NSGlobalBlock__` | `_NSConcreteGlobalBlock` | 数据区 | 不捕获局部自动变量，或只访问全局变量 / static 变量 | 什么也不做，返回自身 |
+| `__NSStackBlock__` | `_NSConcreteStackBlock` | 栈 | 捕获了局部自动变量，但还没有被 copy | 拷贝到堆上，变成 Malloc Block |
+| `__NSMallocBlock__` | `_NSConcreteMallocBlock` | 堆 | Stack Block 执行 copy 后；ARC 下赋值给强引用变量、作为返回值、传给 GCD 等常见场景 | 引用计数 +1 |
+
+示例：
+
+```objc
+// 1. Global Block：不捕获局部自动变量
+void (^b1)(void) = ^{
+    NSLog(@"global");
+}; // __NSGlobalBlock__
+
+// 访问全局变量或 static 变量仍然通常是 Global Block
+static int s = 10;
+void (^b2)(void) = ^{
+    NSLog(@"%d", s);
+}; // __NSGlobalBlock__
+
+// 2. Stack Block：捕获局部自动变量且未 copy
+int a = 10;
+NSLog(@"%@", [^{ NSLog(@"%d", a); } class]); // MRC 下常见为 __NSStackBlock__
+
+// 3. Malloc Block：Stack Block 被 copy 到堆上
+void (^b3)(void) = ^{
+    NSLog(@"%d", a);
+}; // ARC 下通常自动 copy 为 __NSMallocBlock__
+```
+
+在 ARC 下，Stack Block 很少直接暴露出来，因为编译器会在很多场景自动插入 copy，例如赋值给 `__strong` Block 变量或 `copy` 属性、Block 作为返回值、传给 GCD API、传给 Cocoa 中 `usingBlock` 风格的 API 等。Block 属性通常声明为 `copy`，本质目的就是把可能位于栈上的 Block 移到堆上，延长生命周期。
+
+**变量捕获规则：**
+
+| 变量类型 | 是否捕获 | 捕获方式 | Block 内能否修改 | 原因 |
+|---------|---------|---------|-----------------|------|
+| 局部自动变量 `auto` | 捕获 | 值拷贝 | 不能修改变量本身 | Block 结构体中保存的是创建时的副本 |
+| `static` 局部变量 | 捕获 | 指针拷贝 | 可以修改 | static 变量在数据区，生命周期足够长 |
+| 全局变量 / 静态全局变量 | 不需要捕获 | 直接访问全局地址 | 可以修改 | 地址编译期可确定 |
+| `__block` 局部变量 | 捕获 | 包装成 byref 结构体，捕获指针 | 可以修改 | 通过 `__forwarding` 间接访问同一份变量 |
+| 对象类型局部变量 | 捕获 | 指针值拷贝 + 引用管理 | 可以修改对象内容，不能改指针指向 | copy 到堆时通过 `_Block_object_assign` 管理引用 |
+
+局部自动变量是值拷贝：
+
+```objc
+int a = 10;
+void (^block)(void) = ^{
+    NSLog(@"%d", a);
+};
+a = 20;
+block(); // 输出 10
+```
+
+因为 `a` 被拷贝进了 Block 结构体，之后外部 `a` 再变化，不会影响 Block 内部保存的副本。Block 内部也不能直接写 `a = 30`，因为修改副本对外部变量没有意义，编译器直接禁止这种语义。
+
+`static` 局部变量捕获的是地址：
+
+```objc
+static int count = 0;
+void (^block)(void) = ^{
+    count++;
+};
+```
+
+底层相当于 Block 结构体里保存 `int *count`，执行时通过指针修改同一份数据。
+
+全局变量和静态全局变量通常不作为成员捕获，因为它们的地址本来就是全局可访问的，Block 执行函数里直接访问即可。
+
+**对象变量捕获：**
+
+对象类型变量捕获的是“对象指针的值”，但 Block copy 到堆上时还要处理引用关系：
+
+```objc
+NSMutableArray *array = [NSMutableArray array];
+void (^block)(void) = ^{
+    [array addObject:@"hello"]; // 可以修改对象内容
+    // array = nil;             // 不能修改指针指向，除非 array 用 __block 修饰
+};
+```
+
+如果捕获的是默认 `__strong` 对象，堆 Block 会强持有该对象；如果捕获的是 `__weak` 对象，Block 内部保存弱引用；如果是 `__unsafe_unretained`，则只保存裸指针。编译器会在 Block 描述信息中生成 `copy` / `dispose` 辅助函数，在 copy 时调用 `_Block_object_assign`，释放时调用 `_Block_object_dispose`。
+
+**`__block` 的底层原理：**
+
+`__block` 不是简单地让变量“按引用捕获”，而是把变量包装成一个 `__Block_byref` 结构体：
+
+```c
+struct __Block_byref_a_0 {
+    void *__isa;
+    struct __Block_byref_a_0 *__forwarding;
+    int __flags;
+    int __size;
+    int a;
+};
+```
+
+初始时，`__forwarding` 指向栈上的自己：
+
+```text
+栈上 byref 结构体
+┌──────────────────────┐
+│ __forwarding ──┐     │
+│ a = 10         │     │
+└────────────────┼─────┘
+                 └──→ 自己
+```
+
+当捕获它的 Block 从栈 copy 到堆时，`__block` 变量对应的 byref 结构体也会被 copy 到堆上，并发生转发：
+
+```text
+栈上 byref                         堆上 byref
+┌──────────────────────┐          ┌──────────────────────┐
+│ __forwarding ─────────────────→ │ __forwarding ──┐     │
+│ a = 10（旧）          │          │ a = 10         │     │
+└──────────────────────┘          └────────────────┼─────┘
+                                                   └──→ 自己
+```
+
+之后无论在 Block 内部还是外部访问 `a`，都会被编译器转换为通过 `a.__forwarding->a` 访问。这样即使 Block 已经从栈移动到堆，所有访问仍然会落到堆上的同一份变量，保证读写一致。
+
+```objc
+__block int a = 10;
+void (^block)(void) = ^{
+    a = 20;
+};
+block();
+NSLog(@"%d", a); // 20
+```
+
+如果 `__block` 修饰的是对象变量，ARC 下它默认仍然是强引用；`__block` 只解决“能否修改变量指针指向”的问题。
 
 → [Block底层原理](articles/ios-basics/Block底层原理.md)
 
