@@ -2603,6 +2603,90 @@ A: weak通过Runtime的**SideTable + weak_table + weak_entry**三层结构实现
 </details>
 
 <details>
+<summary><b>Q: Block中直接使用weakSelf和转成strongSelf有什么区别？</b></summary>
+
+典型代码如下：
+
+```objc
+__weak typeof(self) weakSelf = self;
+view.action = ^{
+    [weakSelf action];
+};
+```
+
+和：
+
+```objc
+__weak typeof(self) weakSelf = self;
+view.action = ^{
+    __strong typeof(weakSelf) strongSelf = weakSelf;
+    [strongSelf action];
+};
+```
+
+两者都能避免Block强持有`self`导致的循环引用。区别在于：**直接使用`weakSelf`是每次使用时读取弱引用；转成`strongSelf`是先从弱引用中取出对象并强持有，在当前作用域内复用这个稳定对象。**
+
+底层上，`[weakSelf action]`并不是直接对裸指针发消息。ARC通常会把一次weak读取转换为类似逻辑：
+
+```objc
+id tmp = objc_loadWeakRetained(&weakSelf);
+objc_msgSend(tmp, @selector(action));
+objc_release(tmp);
+```
+
+`objc_loadWeakRetained`会从weak引用位置读取对象，并尝试retain成功后返回，保证这一次消息发送期间对象不会释放。如果对象已经在释放或weak引用已被清零，则返回`nil`。
+
+而strongSelf写法大致是：
+
+```objc
+id strongSelf = objc_loadWeakRetained(&weakSelf);
+objc_msgSend(strongSelf, @selector(action));
+objc_release(strongSelf); // 作用域结束时由ARC插入
+```
+
+如果Block里只有一次`weakSelf`访问，两种写法底层差异很小，通常都会读取一次weak引用。strongSelf版本只是把这次读取结果保存为局部强引用，保活范围更明确。
+
+如果Block里多次访问：
+
+```objc
+[weakSelf step1];
+[weakSelf step2];
+[weakSelf step3];
+```
+
+通常会发生多次weak读取，每次都可能调用类似`objc_loadWeakRetained`的逻辑。
+
+```objc
+id tmp1 = objc_loadWeakRetained(&weakSelf);
+objc_msgSend(tmp1, @selector(step1));
+objc_release(tmp1);
+
+id tmp2 = objc_loadWeakRetained(&weakSelf);
+objc_msgSend(tmp2, @selector(step2));
+objc_release(tmp2);
+
+id tmp3 = objc_loadWeakRetained(&weakSelf);
+objc_msgSend(tmp3, @selector(step3));
+objc_release(tmp3);
+```
+
+strongSelf写法则只读取一次weak引用：
+
+```objc
+id strongSelf = objc_loadWeakRetained(&weakSelf);
+
+objc_msgSend(strongSelf, @selector(step1));
+objc_msgSend(strongSelf, @selector(step2));
+objc_msgSend(strongSelf, @selector(step3));
+
+objc_release(strongSelf);
+```
+
+→ [weak详解](articles/ios-basics/weak详解.md)
+
+</details>
+
+<details>
 <summary><b>Q: weak变量在对象释放后为什么能自动变成nil？</b></summary>
 
 
