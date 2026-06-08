@@ -59,8 +59,8 @@
 
 | 引用方式 | 搜索范围 | 典型用途 |
 |---------|---------|---------|
-| `"..."` | 当前目录 + 所有配置的搜索路径 | 项目内部头文件 |
-| `<...>` | 仅系统/Framework搜索路径 | 系统库、第三方Framework |
+| `"..."` | Includer目录 + Quoted/Angled/System；Framework形式还会查`-F` | 项目内部头文件 |
+| `<...>` | Angled/System；Framework形式还会查`-F` | 系统库、第三方Framework |
 
 那么 Clang 具体是如何查找头文件的？搜索路径又是怎么配置的？
 
@@ -1238,7 +1238,7 @@ flowchart TD
 **可能原因**：
 1. Header Search Paths配置不正确
 2. 头文件未添加到Xcode项目（仅在文件系统中存在）
-3. Framework未正确链接
+3. Framework Search Paths配置不正确，或Framework未被加入当前Target
 4. `Use Header Map`被禁用
 
 **排查方法**：
@@ -1248,20 +1248,26 @@ flowchart TD
 
 ### Q2: #include、#import ""、#import <>、@import的区别？
 
-| 特性 | #include | #import "" | #import <> | @import |
-|-----|----------|-----------|-----------|---------|
-| 语法来源 | C预处理器 | Objective-C预处理器 | Objective-C预处理器 | Clang Modules |
-| 重复包含保护 | 无 | 自动防止 | 自动防止 | 自动防止 |
-| 搜索路径 | 取决于引用方式 | Quoted + Angled + System | Angled + System | Module路径 |
-| 编译缓存 | 无 | 无（启用Module后有） | 无（启用Module后有） | 有（.pcm文件） |
-| 宏隔离 | 无 | 无 | 无 | 有 |
-| 自动链接Framework | 否 | 否 | 否 | 是 |
+- `#include`：C/C++的文本包含，可能重复包含，需要自己写 include guard 或 `#pragma once`
+- `#import`：Objective-C的文本包含，会自动防止同一个头文件被重复包含
+- `#import "..."`：优先找当前引用者所在目录和用户头文件路径，常用于项目内部头文件
+- `#import <...>`：不找当前引用者目录和 Quoted 路径，常用于系统库、第三方库、Framework
+- `@import`：导入 Clang Module，不是简单复制头文件，支持模块缓存、宏隔离和自动链接 Framework
+
+| 写法 | 本质 | 主要搜索范围 | 是否防重复 | 是否自动链接Framework |
+|-----|------|-------------|-----------|----------------------|
+| `#include "A.h"` / `#include <A.h>` | C预处理器文本包含 | 取决于双引号或尖括号 | 否 | 否 |
+| `#import "A.h"` | Objective-C文本包含 | Includer目录 + Quoted + Angled + System；如果是`Framework/Header.h`还会查`-F` | 是 | 否 |
+| `#import <A.h>` | Objective-C文本包含 | Angled + System；如果是`Framework/Header.h`还会查`-F` | 是 | 否 |
+| `@import UIKit;` | Clang Module导入 | Module Map + Framework Search Paths + 编译器内置Module | 是 | 是 |
 
 **搜索路径**：
-- **Quoted路径**：当前源文件所在目录 + `-iquote`指定的路径（对应Xcode的User Header Search Paths），专供双引号引用使用
-- **Angled路径**：`-I`指定的路径（对应Xcode的Header Search Paths），双引号和尖括号都会搜索
-- **System路径**：`-isystem`指定的路径（对应Xcode的System Header Search Paths）+ 编译器内置路径（如`/usr/include`、SDK头文件路径）
-- **Module路径**：`-fmodule-map-file`指定的modulemap文件路径 + Framework目录下的`Modules/module.modulemap` + 编译器内置Module路径
+- **Includer目录**：写下这句`#import "A.h"`的那个文件所在目录，只对双引号形式生效
+- **Quoted路径**：`-iquote`指定的路径，对应Xcode的User Header Search Paths，只给双引号形式使用
+- **Angled路径**：`-I`指定的路径，对应Xcode的Header Search Paths，双引号和尖括号都会搜索
+- **System路径**：`-isystem`指定的路径，对应Xcode的System Header Search Paths，加上SDK和编译器内置头文件路径
+- **Framework路径**：`-F`指定的路径，对应Xcode的Framework Search Paths，用于查找`Framework.framework/Headers/Header.h`和`Framework.framework/Modules/module.modulemap`
+- **Module路径**：`-fmodule-map-file`指定的modulemap文件、Framework目录中的`Modules/module.modulemap`、编译器内置Module路径
 
 ### Q3: Clang Module只能通过@import使用吗？
 

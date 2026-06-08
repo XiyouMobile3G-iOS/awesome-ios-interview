@@ -1875,6 +1875,8 @@ func process_Circle(_ items: [Circle]) {
 
 所以，`Codable` 的本质是一套静态、类型安全、可组合的序列化机制。它把大部分机械性的字段映射代码交给编译器生成，把数据形态抽象成容器协议，再把具体格式交给不同的 Encoder/Decoder 实现。相比 Runtime 反射方案，它的优势是编译期约束更强、性能更可控、错误路径更清晰；解码失败时还能通过 `DecodingError` 和 `codingPath` 精确知道是哪个字段、哪一层嵌套出了问题。不过它也没那么“动态”，复杂字段映射、默认值、条件编码、扁平化或嵌套转换等场景，通常需要手写 `CodingKeys`、`init(from:)` 或 `encode(to:)` 来定制。
 
+→ [Codable底层原理](articles/ios-basics/Codable底层原理.md)
+
 </details>
 
 ### UI 与渲染
@@ -3531,21 +3533,26 @@ Mirror 的底层依赖 Swift 编译器在 Mach-O 中生成的反射元数据。�
 <details>
 <summary><b>Q: #include、#import ""、#import <>、@import的区别？</b></summary>
 
+- `#include`：C/C++的文本包含，可能重复包含，需要自己写 include guard 或 `#pragma once`
+- `#import`：Objective-C的文本包含，会自动防止同一个头文件被重复包含
+- `#import "..."`：优先找当前引用者所在目录和用户头文件路径，常用于项目内部头文件
+- `#import <...>`：不找当前引用者目录和 Quoted 路径，常用于系统库、第三方库、Framework
+- `@import`：导入 Clang Module，不是简单复制头文件，支持模块缓存、宏隔离和自动链接 Framework
 
-| 特性 | #include | #import "" | #import <> | @import |
-|-----|----------|-----------|-----------|---------|
-| 语法来源 | C预处理器 | Objective-C预处理器 | Objective-C预处理器 | Clang Modules |
-| 重复包含保护 | 无 | 自动防止 | 自动防止 | 自动防止 |
-| 搜索路径 | 取决于引用方式 | Quoted + Angled + System | Angled + System | Module路径 |
-| 编译缓存 | 无 | 无（启用Module后有） | 无（启用Module后有） | 有（.pcm文件） |
-| 宏隔离 | 无 | 无 | 无 | 有 |
-| 自动链接Framework | 否 | 否 | 否 | 是 |
+| 写法 | 本质 | 主要搜索范围 | 是否防重复 | 是否自动链接Framework |
+|-----|------|-------------|-----------|----------------------|
+| `#include "A.h"` / `#include <A.h>` | C预处理器文本包含 | 取决于双引号或尖括号 | 否 | 否 |
+| `#import "A.h"` | Objective-C文本包含 | Includer目录 + Quoted + Angled + System；如果是`Framework/Header.h`还会查`-F` | 是 | 否 |
+| `#import <A.h>` | Objective-C文本包含 | Angled + System；如果是`Framework/Header.h`还会查`-F` | 是 | 否 |
+| `@import UIKit;` | Clang Module导入 | Module Map + Framework Search Paths + 编译器内置Module | 是 | 是 |
 
 **搜索路径**：
-- **Quoted路径**：当前源文件所在目录 + `-iquote`指定的路径（Xcode无直接对应设置，需通过Other C Flags手动添加），专供双引号引用使用
-- **Angled路径**：`-I`指定的路径（对应Xcode的Header Search Paths），双引号和尖括号都会搜索
-- **System路径**：`-isystem`指定的路径（对应Xcode的System Header Search Paths）+ 编译器内置路径（如`/usr/include`、SDK头文件路径）
-- **Module路径**：`-fmodule-map-file`指定的modulemap文件路径 + Framework目录下的`Modules/module.modulemap` + 编译器内置Module路径
+- **Includer目录**：写下这句`#import "A.h"`的那个文件所在目录，只对双引号形式生效
+- **Quoted路径**：`-iquote`指定的路径，对应Xcode的User Header Search Paths，只给双引号形式使用
+- **Angled路径**：`-I`指定的路径，对应Xcode的Header Search Paths，双引号和尖括号都会搜索
+- **System路径**：`-isystem`指定的路径，对应Xcode的System Header Search Paths，加上SDK和编译器内置头文件路径
+- **Framework路径**：`-F`指定的路径，对应Xcode的Framework Search Paths，用于查找`Framework.framework/Headers/Header.h`和`Framework.framework/Modules/module.modulemap`
+- **Module路径**：`-fmodule-map-file`指定的modulemap文件、Framework目录中的`Modules/module.modulemap`、编译器内置Module路径
 
 → [Objective-C中import详解](articles/ios-basics/Objective-C中import详解.md)
 
@@ -3556,20 +3563,6 @@ Mirror 的底层依赖 Swift 编译器在 Mach-O 中生成的反射元数据。�
 
 
 **不是的**。`#import <Framework/Header.h>`在启用Modules后会自动转换为Module引用，`#import "FrameworkHeader.h"`通过Header Map映射后也可能触发Module引用。
-
-→ [Objective-C中import详解](articles/ios-basics/Objective-C中import详解.md)
-
-</details>
-
-<details>
-<summary><b>Q: 为什么同一个头文件，用双引号能找到，用尖括号找不到？</b></summary>
-
-
-这是因为两种引用方式的搜索范围不同：
-- 双引号`"..."`会搜索所有路径（Quoted + Angled + System）
-- 尖括号`<...>`只搜索Angled和System路径
-
-如果头文件只在`-iquote`指定的路径中，尖括号就找不到它。解决方法是将路径同时添加到Header Search Paths（对应`-I`参数）。
 
 → [Objective-C中import详解](articles/ios-basics/Objective-C中import详解.md)
 

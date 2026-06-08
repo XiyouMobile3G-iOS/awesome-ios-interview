@@ -10,15 +10,34 @@
 
 ## 整体架构
 
-在开始深入之前，先建立整体印象。`Codable` 涉及三层角色：
+在开始深入之前，先建立整体印象。`Codable` 可以拆成三层角色：
+
+- **用户类型层**：业务中的 `struct` / `class` / `enum`，声明遵循 `Codable`
+- **标准库与编译器层**：标准库定义 `Encodable` / `Decodable` / `Encoder` / `Decoder` 等协议，编译器为符合条件的类型合成 `encode(to:)` 和 `init(from:)`
+- **格式实现层**：Foundation 或第三方提供具体 `Encoder` / `Decoder`，负责把容器操作落到 JSON、Plist、BSON 等格式上
 
 ```mermaid
-graph LR
-    A[用户类型<br/>struct/class/enum] -->|conforms to| B[Encodable/Decodable<br/>标准库协议]
-    B -->|编译期合成| C[encode(to:)<br/>init(from:)]
-    C -->|调用| D[Encoder/Decoder<br/>标准库协议]
-    D -->|具体实现| E[JSONEncoder<br/>PropertyListEncoder<br/>自定义Encoder]
-    E -->|最终输出| F[Data / 字符串 / 其他格式]
+flowchart LR
+    subgraph L1[用户类型层]
+        A[struct / class / enum<br/>声明遵循 Codable]
+    end
+
+    subgraph L2[标准库与编译器层]
+        B[Encodable / Decodable<br/>协议要求]
+        C["编译器合成<br/>encode(to:) / init(from:)"]
+        D[Encoder / Decoder<br/>容器协议]
+        B --> C
+        C --> D
+    end
+
+    subgraph L3[格式实现层]
+        E[JSONEncoder / JSONDecoder<br/>PropertyListEncoder / 第三方实现]
+        F[Data / 字符串 / 其他格式]
+        E --> F
+    end
+
+    A -->|conforms to| B
+    D -->|由具体类型实现| E
 ```
 
 核心思想是：**标准库只定义"如何描述一个可编码类型"和"编码器需要提供什么能力"，具体的格式（JSON、Plist、BSON…）由 Foundation 或第三方实现**。用户类型只需要遵循协议，剩下的由编译器在 SIL 层自动生成。
