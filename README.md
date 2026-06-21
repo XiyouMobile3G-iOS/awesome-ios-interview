@@ -3656,6 +3656,142 @@ HEADER_SEARCH_PATHS = $(inherited) "${PODS_ROOT}/Headers/Public" "${PODS_ROOT}/H
 </details>
 
 <details>
+<summary><b>Q: Objective-C 中 `nil`、`Nil`、`NULL`、`NSNull` 有什么区别？</b></summary>
+
+| 符号 | 类型 | 含义 | 使用场景 |
+|------|------|------|----------|
+| `nil` | `id` | 指向空对象的指针 | Objective-C 对象为空 |
+| `Nil` | `Class` | 指向空类的指针 | 类对象为空 |
+| `NULL` | `void *` | 空指针（C 风格） | 任意 C 指针为空 |
+| `NSNull` | `NSNull *` | 单例对象，表示"空值" | 放入集合类中表示空位 |
+
+```objc
+id obj = nil;           // 对象为空
+Class cls = Nil;        // 类为空
+void *ptr = NULL;       // C 指针为空
+
+// nil 的特殊之处：向 nil 发送消息是安全的，不会崩溃
+[nil doSomething];      // 什么都不发生，返回 0/nil/NO
+
+// NSNull 用于集合中占位
+NSArray *arr = @[@"a", [NSNull null], @"c"];  // 中间位置表示"空"
+```
+
+向 `nil` 发消息不会崩溃是 Objective-C 的一个重要特性，但这也意味着某些 bug 会"静默失败"而不暴露。
+
+</details>
+
+<details>
+<summary><b>Q: `@synthesize` 和 `@dynamic` 分别是什么？</b></summary>
+
+| 关键字 | 含义 |
+|--------|------|
+| `@synthesize` | 让编译器**自动生成** getter/setter 实现 |
+| `@dynamic` | 告诉编译器**不要生成** getter/setter，开发者自己提供（或在运行时提供） |
+
+```objc
+@implementation MyClass
+
+// @synthesize：自动生成（现代 OC 默认行为，通常不需要显式写）
+@synthesize name = _name;  // 指定成员变量名为 _name
+
+// @dynamic：不自动生成，常用于 Core Data 的 NSManagedObject 子类
+@dynamic createdAt;
+
+@end
+```
+
+现代 Objective-C（Xcode 4.4+）中，`@property` 会自动合成 getter/setter 和带下划线的成员变量，一般不需要显式写 `@synthesize`。
+
+</details>
+
+<details>
+<summary><b>Q: `[self class]` 和 `[super class]` 结果一样吗？</b></summary>
+
+**通常结果一样。** 关键原因是 `[super class]` 的消息接收者仍然是 `self`（当前对象），只是方法查找从父类开始。
+
+```objc
+// B 继承自 A
+@implementation B
+- (void)test {
+    NSLog(@"%@", [self class]);   // B
+    NSLog(@"%@", [super class]);  // B（不是 A！）
+}
+@end
+```
+
+`super` 的本质是：消息接收者仍然是 `self`，但告诉编译器从父类的方法列表开始查找。`NSObject` 的 `-class` 方法执行时拿到的 `self` 仍然是当前对象，所以可以根据这个对象的 `isa` 获取真实类型，返回结果自然还是 `B`。
+
+可以粗略理解为：
+
+```objc
+- (Class)class {
+    return object_getClass(self);
+}
+```
+
+`[self class]` 和 `[super class]` 的 receiver 都是同一个 `self`。如果当前类重写了 `-class`，`[self class]` 和 `[super class]` 就可能不同，因为 `[super class]` 会跳过当前类的方法实现。
+
+</details>
+
+<details>
+<summary><b>Q: `NSString` 用 `==` 比较和 `isEqualToString:` 有什么区别？</b></summary>
+
+```objc
+NSString *a = @"hello";
+NSString *b = [NSString stringWithFormat:@"hello"];
+
+a == b;                      // ❌ 可能为 NO（比较指针地址）
+[a isEqualToString:b];       // ✅ YES（比较字符串内容）
+```
+
+`==` 比较的是**指针地址**，`isEqualToString:` 比较的是**字符串内容**。对于常量字符串，编译器可能会做字符串驻留（string interning），使 `==` 偶尔返回 `YES`，但这是不可靠的实现细节，不能依赖。
+
+</details>
+
+<details>
+<summary><b>Q: `NSArray` 和 `NSMutableArray` 的 `copy` 和 `mutableCopy` 有什么区别？</b></summary>
+
+| 操作 | 源类型 | 结果类型 | 是否可变 |
+|------|--------|----------|----------|
+| `copy` | 任意 | `NSArray`（不可变） | ❌ |
+| `mutableCopy` | 任意 | `NSMutableArray`（可变） | ✅ |
+
+```objc
+NSMutableArray *mutable = [@[@1, @2, @3] mutableCopy];
+NSArray *immutable = [mutable copy];  // 不可变副本
+NSMutableArray *mutableCopy = [mutable mutableCopy];  // 可变副本
+```
+
+对于不可变对象调用 `copy`，实际上是**浅拷贝**（返回自身，不产生新对象，因为不可变对象本身就是安全的）。对于可变对象调用 `copy`，则是**深拷贝**（产生不可变副本）。
+
+</details>
+
+<details>
+<summary><b>Q: `self.xxx` 和 `_xxx` 有什么区别？</b></summary>
+
+```objc
+self.name = @"Tom";   // 调用 setter 方法，走属性修饰符逻辑（如 copy）
+_name = @"Tom";       // 直接访问成员变量，不走 setter
+```
+
+| 对比项 | `self.xxx` | `_xxx` |
+|--------|-----------|--------|
+| 本质 | 调用 getter/setter 方法 | 直接访问成员变量 |
+| KVO 通知 | ✅ 会触发 | ❌ 不会触发 |
+| 属性修饰符 | ✅ 生效（如 copy） | ❌ 不生效 |
+| 懒加载 | ✅ 会触发 | ❌ 不会触发 |
+| 性能 | 略慢（方法调用） | 略快（直接访问） |
+
+**原则：**
+- 外部访问 → 必须用 `self.xxx`
+- 初始化方法（`init`）中 → 用 `_xxx`（避免触发子类重写的 setter）
+- `dealloc` 中 → 用 `_xxx`
+- 其他内部方法 → 一般用 `self.xxx`（保证 KVO 和懒加载正常工作）
+
+</details>
+
+<details>
 <summary><b>Q: static 局部变量和普通局部变量有什么区别？</b></summary>
 
 
@@ -4530,44 +4666,286 @@ Protobuf比JSON高效的原因：
 ### 架构设计
 
 <details>
-<summary><b>Q: iOS中常见的架构模式有哪些？各有什么特点？</b></summary>
+<summary><b>Q: 为什么iOS中的MVC容易变成Massive View Controller？如何改进？</b></summary>
 
-A: 常见的有MVC、MVP、MVVM、MVI、VIPER，它们在职责分离、可测试性、代码量上各有不同，需要根据项目规模和团队情况选择。 → [iOS架构概述](articles/ios-advanced/architecture/iOS架构概述.md)
+Apple的MVC中，View和Model不能直接通信，所有交互都要通过Controller中转。而在UIKit里，`UIViewController`本身又负责生命周期管理、View层级管理、系统交互、导航、弹窗等职责，所以实际开发中Controller很容易同时承担以下工作：
 
-</details>
+- 接收用户事件，例如按钮点击、列表选择、输入变化；
+- 管理UI布局和UI状态；
+- 调用网络请求、数据库或缓存；
+- 处理业务逻辑和数据校验；
+- 处理Model到View的转换；
+- 处理页面跳转、弹窗、权限申请；
+- 实现`UITableViewDataSource`、`UITableViewDelegate`、各种自定义Delegate。
 
-<details>
-<summary><b>Q: MVC架构有什么问题？为什么会出现Massive View Controller？</b></summary>
+当这些职责都集中在一个ViewController里时，就会形成Massive View Controller。它的问题主要有四个：代码难读、逻辑难复用、依赖UIKit导致单元测试困难、修改一个功能容易影响其他功能。
 
-A: MVC中ViewController同时处理视图逻辑和业务逻辑，职责不清导致代码臃肿；可通过抽离DataSource、网络层等方式改善。 → [MVC架构详解](articles/ios-advanced/architecture/MVC.md)
+MVC改进：
 
-</details>
+1. **抽离Service层**：网络请求、缓存、数据库访问不要写在ViewController里，而是放到`UserService`、`OrderService`、`Repository`等对象中。
+2. **抽离DataSource/Delegate**：复杂列表可以把`UITableViewDataSource`封装成独立对象，ViewController只负责协调。
+3. **抽离View**：将复杂UI封装成自定义`UIView`，ViewController只调用`configure`或绑定数据。
+4. **抽离数据转换逻辑**：把Model转换成展示文案、颜色、按钮状态等逻辑放到ViewModel或Presenter式的小对象中。
+5. **拆分子ViewController**：复杂页面可以拆成多个子模块，由容器ViewController负责组合。
+6. **导航交给Router/Coordinator**：减少ViewController之间直接创建和强依赖。
 
-<details>
-<summary><b>Q: MVP架构是如何解决MVC问题的？</b></summary>
+如果页面继续变复杂，可以进一步演进到MVP、MVVM、MVI或VIPER。**MVC本身并不是错误，问题是ViewController缺少约束时容易成为所有逻辑的容器。改进重点是让ViewController回到协调者角色，而不是业务逻辑的承载者。**
 
-A: MVP通过引入Presenter层将业务逻辑从ViewController中抽离，View变得"被动"只负责UI展示，提高了可测试性。 → [MVP架构详解](articles/ios-advanced/architecture/MVP.md)
-
-</details>
-
-<details>
-<summary><b>Q: MVVM架构的核心特点是什么？如何实现数据绑定？</b></summary>
-
-A: MVVM通过数据绑定实现View和ViewModel的同步，ViewModel不持有View引用；iOS中可使用Combine、RxSwift或KVO实现绑定。 → [MVVM架构详解](articles/ios-advanced/architecture/MVVM.md)
-
-</details>
-
-<details>
-<summary><b>Q: 什么是MVI架构？它与MVVM有什么区别？</b></summary>
-
-A: MVI是单向数据流架构，强调状态不可变性和可预测性；与MVVM的双向绑定不同，MVI的数据只能单向流动。 → [MVI架构详解](articles/ios-advanced/architecture/MVI.md)
+→ [iOS架构概述](articles/ios-advanced/architecture/iOS架构概述.md)
 
 </details>
 
 <details>
-<summary><b>Q: 如何设计一个可扩展的网络层？</b></summary>
+<summary><b>Q: MVP和MVVM有什么区别？Presenter和ViewModel分别应该持有哪些对象？</b></summary>
 
-A: 使用协议抽象、泛型、中间件模式，支持请求拦截、响应处理、错误处理等功能。 → [iOS架构概述](articles/ios-advanced/architecture/iOS架构概述.md)
+MVP和MVVM都用于解决MVC中ViewController职责过重的问题，但它们的通信方式和依赖关系不同。
+
+在**MVP**中，核心是Presenter。View通常是被动的，只负责UI展示和事件转发；Presenter负责业务逻辑、展示逻辑和调用Model/Service。Presenter会通过协议持有View的弱引用，调用View协议方法更新UI。ViewController作为View实现协议，并强持有Presenter。
+
+典型引用关系是：
+
+- ViewController强持有Presenter；
+- Presenter弱持有View协议；
+- Presenter强持有Service或Model；
+- 如果有导航逻辑，Presenter可以弱持有Router或Coordinator协议。
+
+这样设计的好处是Presenter不依赖具体View实现，只依赖协议，因此可以用Mock View做单元测试。但MVP也有缺点：View协议可能随着页面复杂度变得很臃肿，View和Presenter之间仍然是明确的双向通信，导航逻辑如果不单独抽离也容易混乱。
+
+在**MVVM**中，核心是ViewModel。ViewModel不应该持有View，也不应该依赖UIKit。ViewModel负责状态管理、数据转换、展示逻辑和必要的业务逻辑，并通过可观察属性、闭包、Combine、RxSwift等方式向ViewController输出状态。ViewController负责生命周期管理、持有View和ViewModel、建立数据绑定、转发用户事件。
+
+典型引用关系是：
+
+- ViewController强持有View和ViewModel；
+- ViewModel强持有Service或Model；
+- ViewModel不持有ViewController或View；
+- ViewController通过绑定观察ViewModel输出，并把用户事件转发给ViewModel。
+
+两者核心区别：
+
+| 对比点 | MVP | MVVM |
+|------|-----|------|
+| 核心对象 | Presenter | ViewModel |
+| View更新方式 | Presenter调用View协议方法 | View绑定ViewModel状态 |
+| 是否持有View | Presenter弱持有View协议 | ViewModel不持有View |
+| View是否被动 | 更强调Passive View | View通过绑定响应状态变化 |
+| 测试重点 | 测Presenter是否调用正确View方法 | 测ViewModel输入输出和状态变化 |
+| 常见问题 | View协议膨胀、导航归属不清 | 绑定复杂、ViewModel膨胀、内存管理 |
+
+**MVP适合希望明确命令式更新UI、团队不想引入响应式绑定的场景；MVVM适合状态驱动UI、SwiftUI或响应式编程经验较好的团队。**
+
+→ [iOS架构概述](articles/ios-advanced/architecture/iOS架构概述.md)
+
+</details>
+
+<details>
+<summary><b>Q: MVVM相比MVC的优势是什么？</b></summary>
+
+MVVM相比MVC最大的优势，是通过引入ViewModel把ViewController中的展示逻辑、状态管理和数据转换逻辑抽离出来，让ViewController从“什么都管”的中心对象，回到更轻量的页面协调者角色。
+
+在MVC中，尤其是Apple MVC里，View和Model不能直接通信，Controller需要协调View和Model。同时`UIViewController`还天然负责生命周期、View层级、系统交互、导航、弹窗等工作。业务一复杂，网络请求、数据校验、状态判断、Model到UI文案的转换、列表数据源、用户事件处理都容易堆到ViewController里，最终形成Massive View Controller。
+
+MVVM的典型分工是：
+
+- **View/ViewController**：负责UI展示、生命周期、View层级管理、建立绑定、转发用户事件。
+- **ViewModel**：负责展示逻辑、状态管理、输入输出转换、调用Model或Service获取数据。
+- **Model/Service**：Model表示业务数据结构，Service负责网络请求、缓存、数据库和业务规则。
+
+MVVM相比MVC主要有以下优势：
+
+1. **减轻ViewController职责**
+   MVC中ViewController往往既处理UI，又处理业务逻辑，还处理数据转换。MVVM把展示逻辑和状态管理放到ViewModel中，ViewController只负责绑定ViewModel状态、转发用户事件和处理UIKit生命周期，代码更容易阅读和维护。
+
+2. **提高可测试性**
+   MVC中的业务和展示逻辑如果写在ViewController里，测试时会依赖UIKit、生命周期和UI环境，单元测试成本高。MVVM中的ViewModel通常不依赖UIKit，可以直接构造Mock Service，测试输入、输出和状态变化。例如登录页可以测试“邮箱和密码合法时登录按钮是否可用”，而不需要启动真实页面。
+
+3. **展示逻辑更容易复用**
+   在MVC中，格式化文案、按钮状态、空页面判断、错误提示映射等逻辑常常散落在ViewController中，复用困难。MVVM可以把这些逻辑封装在ViewModel里，同一套ViewModel输出可以被不同View复用，例如UIKit页面、SwiftUI页面或不同样式的业务入口。
+
+4. **更适合状态驱动UI**
+   MVVM通常会让ViewModel暴露可观察状态，例如`isLoading`、`users`、`errorMessage`、`isLoginEnabled`。View根据状态变化自动更新，而不是在多个回调里手动到处改UI。这样可以减少“某个分支忘记刷新UI”或“loading和error状态同时出现”的问题。
+
+5. **View和Model解耦更彻底**
+   MVC中ViewController经常直接拿Model字段更新UI，页面越复杂，ViewController越了解业务数据细节。MVVM会把Model转换为面向展示的ViewModel输出，View层不需要关心原始Model结构。例如`firstName + lastName`、日期格式化、价格展示、按钮是否可点，都可以由ViewModel统一产出。
+
+6. **更适配响应式编程和SwiftUI**
+   MVVM天然适合Combine、RxSwift、KVO、闭包回调等绑定方式，也和SwiftUI的`ObservableObject`、`@Published`、`@Observable`等状态驱动机制更契合。相比MVC命令式地手动更新UI，MVVM更容易形成“状态变化 -> UI刷新”的统一数据流。
+
+但MVVM也不是没有成本。简单页面使用MVVM可能会增加不必要的ViewModel和绑定代码；复杂页面如果把所有业务规则都塞进ViewModel，也会形成Massive ViewModel。因此实践中需要继续拆分：
+
+- 复杂业务规则下沉到Service、UseCase或Domain层；
+- 数据访问逻辑放到Repository或API Client；
+- 复杂导航交给Coordinator，形成MVVM-C；
+- 状态特别复杂时，可以进一步演进到MVI或TCA。
+
+**总结来说，MVVM相比MVC的核心优势是：让ViewController变轻，让展示逻辑可测试、可复用，并通过状态绑定让UI更新更清晰。它解决的是MVC中Controller过重和逻辑难测试的问题，但仍然需要控制ViewModel职责边界，避免把MVC的问题转移到ViewModel中。**
+
+→ [iOS架构概述](articles/ios-advanced/architecture/iOS架构概述.md)
+
+</details>
+
+<details>
+<summary><b>Q: MVI相比MVVM解决了什么问题？Reducer为什么要设计成纯函数？</b></summary>
+
+MVI是一种单向数据流架构，核心流程是：
+
+```
+View -> Intent/Action -> Store -> Reducer -> State -> View
+```
+
+在MVI中，界面由一个完整的State描述，用户操作、生命周期事件、网络请求结果都被建模成Intent或Action。所有状态变化都进入Reducer，由Reducer根据当前State和Action计算出新的State，View再根据新State重新渲染。
+
+相比MVVM，MVI主要解决三个问题：
+
+1. **状态一致性问题**  
+   MVVM中ViewModel通常有多个独立属性，例如`users`、`isLoading`、`error`、`selectedIndex`。这些属性可能在不同方法里被修改，入口多了以后容易漏改某个状态。例如重试时设置了`isLoading = true`，却忘记清空上一次的`error`。MVI把状态集中到一个State对象中，并在Reducer里统一处理状态转换，可以减少这种遗漏。
+
+2. **状态变化难以追踪的问题**  
+   MVVM里状态可能从ViewModel的任意方法被修改。MVI要求所有状态变化都通过Action进入Reducer，因此可以记录“哪个Action让State从A变成B”，方便日志、调试和时间旅行调试。
+
+3. **副作用分散的问题**  
+   MVVM中网络请求、数据库操作、定时器等副作用可能散落在ViewModel各个方法里。MVI强调Reducer只做状态计算，副作用放在Store或Effect层处理，副作用完成后再发送新的Action回到Reducer。
+
+Reducer设计成纯函数，是MVI可预测和可测试的关键。纯函数意味着：
+
+- 输入相同的`State + Action`，输出一定相同；
+- 不发网络请求；
+- 不读写数据库；
+- 不修改全局变量；
+- 不直接操作UI；
+- 不依赖当前时间、随机数等外部状态。
+
+这样Reducer测试非常简单，不需要Mock网络或UIKit，只要构造旧State和Action，断言新State是否符合预期。
+
+在Swift里，MVI通常使用`struct State`配合值语义。Reducer中可以写：
+
+```swift
+var newState = state
+newState.isLoading = true
+return newState
+```
+
+虽然属性是`var`，但由于`struct`是值类型，语义上仍然是“旧State生成新State”，不会修改外部持有的旧State。需要避免用`class`做State，或者用`inout`直接修改外部状态，否则会破坏可追溯性。
+
+MVI的代价是样板代码更多，State、Action、Reducer都需要显式定义。对于简单页面可能过度设计，但对于复杂状态、多入口、多异步副作用的页面，收益非常明显。
+
+→ [iOS架构概述](articles/ios-advanced/architecture/iOS架构概述.md)
+
+</details>
+
+<details>
+<summary><b>Q: TCA和普通MVI有什么关系？TCA的State、Action、Reducer、Effect、Dependency、Scope分别是什么？</b></summary>
+
+TCA（The Composable Architecture）可以理解为Swift生态中对MVI/Redux/Elm思想的一套成熟实现。它同样基于单向数据流，但提供了更完整的工程化能力，包括Effect系统、依赖注入、Feature组合、导航状态管理和TestStore测试工具。
+
+TCA中的核心概念如下：
+
+- **State**：描述某个Feature当前所需的全部状态，通常是值类型结构体。State应该尽量最小化，只保留渲染UI和驱动业务逻辑必要的数据。
+- **Action**：枚举，描述Feature中可能发生的所有事件，包括用户点击、输入变化、生命周期事件、异步请求结果等。TCA推荐Action命名描述“发生了什么”，例如`loginButtonTapped`、`userResponse`。
+- **Reducer**：接收State和Action，同步更新State，并返回Effect。Reducer是业务逻辑的核心位置。
+- **Store**：持有State，接收View发送的Action，驱动Reducer执行，并把State变化通知View。
+- **Effect**：封装异步操作或副作用，例如网络请求、定时器、文件读写。Effect完成后可以继续发送Action回到Reducer。
+- **Dependency**：TCA内置的依赖注入系统，用于把网络、数据库、UUID、日期等外部依赖替换成生产实现、测试实现或预览实现。
+- **Scope**：把父Feature中的一部分State和Action映射成子Feature需要的Store，实现Feature组合。
+
+一次典型TCA数据流是：
+
+1. View调用`store.send(.buttonTapped)`；
+2. Store把Action交给Reducer；
+3. Reducer同步修改State；
+4. State变化驱动View重新渲染；
+5. Reducer如果返回Effect，Store执行Effect；
+6. Effect完成后发送新的Action，再次进入Reducer。
+
+TCA相比手写MVI的优势主要有：
+
+1. **组合能力强**：可以通过`Scope`组合固定子Feature，通过`forEach`组合列表项Feature，通过`ifLet`组合可选子Feature。
+2. **副作用标准化**：Effect支持异步、合并、串联、取消，适合处理搜索防抖、轮询、长连接等场景。
+3. **依赖注入完善**：通过`@Dependency`替换外部依赖，测试时可以显式注入Mock。
+4. **测试能力强**：TestStore可以断言发送Action后State如何变化、Effect会回传什么Action，适合做穷尽式测试。
+5. **SwiftUI/UIKit都可用**：Reducer层与UI框架无关，同一个Feature可以对应SwiftUI View，也可以对应UIKit ViewController。
+
+TCA的缺点也很明确：学习曲线更高，代码风格和普通UIKit/MVVM差异较大，简单页面会显得重，团队需要统一理解State、Action、Effect和依赖注入的写法。**TCA不是简单的MVVM替代品，而是一套强约束的状态管理和模块组合框架，适合状态复杂、测试要求高、Feature需要组合的大中型项目。**
+
+→ [iOS架构概述](articles/ios-advanced/architecture/iOS架构概述.md)
+
+</details>
+
+<details>
+<summary><b>Q: VIPER每一层的职责是什么？它适合什么场景，缺点是什么？</b></summary>
+
+VIPER把一个模块拆成View、Interactor、Presenter、Entity、Router五层，核心目标是单一职责和高可测试性。
+
+各层职责如下：
+
+- **View**：负责UI展示，接收用户输入并转发给Presenter。通常由`UIViewController`实现View协议。
+- **Presenter**：负责展示逻辑，接收View事件，调用Interactor执行业务逻辑，把Entity转换为ViewModel，并调用View协议更新UI。
+- **Interactor**：负责业务逻辑和数据获取，不知道UI存在。网络请求、数据库访问通常通过Service或Repository由Interactor调用。
+- **Entity**：纯数据模型，表示业务数据，不包含UI逻辑。
+- **Router**：负责模块组装和页面导航，例如创建VIPER模块、push到详情页、present弹窗。
+
+一次典型数据流是：
+
+1. View触发`viewDidLoad`或用户点击；
+2. View把事件交给Presenter；
+3. Presenter调用Interactor；
+4. Interactor通过Service获取数据，结果回调给Presenter；
+5. Presenter把Entity转换成ViewModel；
+6. Presenter调用View协议更新UI；
+7. 如果需要跳转，Presenter调用Router。
+
+VIPER适合以下场景：
+
+- 金融、交易、医疗等业务复杂且对测试要求高的模块；
+- 团队规模较大，需要多人并行开发同一个业务模块的不同层；
+- 模块生命周期较长，后续维护和扩展成本比初始开发速度更重要；
+- 页面逻辑、业务逻辑、导航逻辑都很复杂，需要清晰边界。
+
+VIPER的主要缺点是代码量大。一个简单页面也要创建多个协议和类，样板代码明显增加；模块之间通信也需要通过Router、Delegate或闭包设计清楚，否则会变得繁琐。对简单页面使用VIPER通常是过度设计。
+
+**VIPER通过极细粒度拆分换来了职责清晰和高可测试性，但代价是复杂度和代码量。它适合复杂、长期维护、测试要求高的模块，不适合所有页面一刀切。**
+
+→ [iOS架构概述](articles/ios-advanced/architecture/iOS架构概述.md)
+
+</details>
+
+<details>
+<summary><b>Q: iOS组件化中常见的组件通信方案有哪些？</b></summary>
+
+组件化的核心目标是让业务组件之间不直接依赖。比如首页组件不应该直接`import UserModule`再创建`UserProfileViewController`，否则用户组件改动会影响首页组件编译，模块边界也会被破坏。组件间通信通常通过中间层完成，常见方案有四类。
+
+**1. URL Router**
+
+通过URL注册和打开页面或服务，例如`user://profile?id=123`。优点是简单、直观、支持跨App跳转，也适合服务端下发动态路由。缺点是参数依赖字符串，类型不安全，复杂对象传递不优雅，URL维护成本较高。
+
+实现原理是维护一张**路由表**，Key通常是URL Pattern，例如`user://profile`，Value是一个Handler闭包或目标页面工厂。业务组件启动时向Router注册自己能处理的URL；调用方只需要把URL交给Router，Router负责解析scheme、host、path和query参数，匹配对应Pattern，然后执行Handler创建页面或调用服务。调用方只依赖Router，不依赖目标组件的具体类。
+
+适合：页面跳转、H5和Native统一路由、动态化跳转场景。
+
+**2. Target-Action**
+
+通过Runtime根据字符串找到目标类和方法，例如CTMediator。调用方不直接依赖目标组件，Mediator通过`Target_User`和`Action_profileWithParams`创建目标页面。优点是无需启动时注册，编译期无直接依赖；缺点是依赖字符串和Runtime，Swift纯项目需要额外处理，运行时才发现错误。
+
+实现原理是约定目标组件暴露一个固定命名的Target类和Action方法，例如用户组件提供`Target_User`类，并实现`Action_profileWithParams:`方法。调用方通过Mediator传入`target = "User"`、`action = "profile"`和参数字典，Mediator内部拼接类名和方法名，再通过`NSClassFromString`、`NSSelectorFromString`、`perform`等Runtime能力动态创建对象并调用方法。为了改善调用体验，通常会给Mediator写Category或扩展，把字符串调用包装成有明确方法名的API。
+
+适合：希望减少注册成本、接受Runtime动态调用、以Objective-C兼容为基础的项目。
+
+**3. Protocol-Class**
+
+定义独立的协议层，业务组件实现协议并注册到容器，调用方只依赖协议，通过容器获取服务。例如首页依赖`UserRouterProtocol`，而不是依赖`UserModule`。优点是类型安全、接口清晰、便于Mock测试；缺点是需要维护独立Protocol组件，服务需要显式注册，协议变更会影响多个组件。
+
+实现原理是引入一个**协议层**和一个**服务容器**。协议层只放对外接口，例如`UserRouterProtocol`、`UserServiceProtocol`，调用方依赖这些协议；用户组件内部提供实现类，例如`UserRouterImpl`，并在启动时把`UserRouterProtocol -> UserRouterImpl`注册到容器。调用方需要能力时，通过`getService(UserRouterProtocol.self)`从容器取出协议实例，再调用协议方法。这样编译期依赖的是抽象协议，不是具体业务组件。
+
+适合：中大型项目、重视类型安全和测试、希望通过接口稳定组件边界的场景。
+
+**4. DI（依赖注入）**
+
+DI可以看作Protocol-Class的增强版。它不仅能按协议解析实现，还能自动构建依赖树，并管理生命周期，例如单例、瞬态、作用域。优点是依赖关系更清晰，测试替换Mock方便，复杂依赖链更好维护；缺点是学习和配置成本更高，过度使用会让依赖来源变得不直观。
+
+实现原理是把对象创建权交给DI容器。各模块先向容器注册“协议对应哪个实现、如何构造、生命周期是什么”。当某个对象需要`UserServiceProtocol`时，不自己创建`UserServiceImpl`，而是由容器解析并注入。如果`UserServiceImpl`又依赖`UserRepositoryProtocol`，`UserRepositoryImpl`又依赖`NetworkServiceProtocol`，容器会递归解析这条依赖链并完成构造。相比Protocol-Class，DI更强调构造器注入、依赖树自动解析和生命周期管理。
+
+适合：依赖关系复杂、需要生命周期管理、测试体系成熟的大型项目。
+
+→ [iOS架构概述](articles/ios-advanced/architecture/iOS架构概述.md)
 
 </details>
 
@@ -5334,183 +5712,8 @@ func canRunNonCriticalWork() -> Bool {
 
 ## AI 相关面试题
 
-### 神经网络基础
+待补充
 
-<details>
-<summary><b>Q: 神经网络的基本结构是什么？它如何工作？</b></summary>
-
-神经网络由**输入层、隐藏层和输出层**组成。每个神经元通过加权求和、加偏置、激活函数三步计算激活值。数据从输入层经过每一层的矩阵运算（$\mathbf{a} = \sigma(W\mathbf{a}^{(\text{prev})} + \mathbf{b})$）到达输出层，这个过程称为前向传播。网络的"智能"存储在通过大量数据学习出来的权重和偏置参数中。
-
-→ [神经网络原理](articles/ai/神经网络原理.md)
-</details>
-
-<details>
-<summary><b>Q: 常见的激活函数有哪些？各自的优缺点是什么？</b></summary>
-
-常见激活函数包括：**Sigmoid**（输出(0,1)但有梯度消失问题）、**Tanh**（零中心但仍有梯度消失）、**ReLU**（计算快、缓解梯度消失但有Dead ReLU问题）、**Leaky ReLU**（解决Dead ReLU）、**GELU**（Transformer中常用）。现代网络默认使用ReLU及其变体，Transformer中常用GELU。
-
-→ [神经网络原理](articles/ai/神经网络原理.md)
-</details>
-
-<details>
-<summary><b>Q: 什么是过拟合和欠拟合？如何解决？</b></summary>
-
-**欠拟合**是模型太简单，训练集上表现就不好；**过拟合**是模型记住了训练数据的噪声，在新数据上表现差（训练损失低但验证损失高）。解决过拟合的方法包括：增加训练数据、正则化（L1/L2）、Dropout（随机关闭部分神经元）、早停（验证损失上升时停止训练）。
-
-→ [神经网络原理](articles/ai/神经网络原理.md)
-</details>
-
-### 反向传播与优化
-
-<details>
-<summary><b>Q: 反向传播算法的原理是什么？</b></summary>
-
-反向传播利用**链式法则**，从输出层到输入层逐层计算损失对每个参数的偏导数。核心是定义误差信号 $\delta_j^{(l)} = \frac{\partial L}{\partial z_j^{(l)}}$，然后通过递推公式 $\boldsymbol{\delta}^{(l)} = ((W^{(l+1)})^T \boldsymbol{\delta}^{(l+1)}) \odot \sigma'(\mathbf{z}^{(l)})$ 向前传递误差。只需一次前向传播加一次反向传播就能计算所有参数的梯度。
-
-→ [反向传播算法](articles/ai/反向传播算法.md)
-</details>
-
-<details>
-<summary><b>Q: 梯度消失和梯度爆炸是什么？如何解决？</b></summary>
-
-**梯度消失**：反向传播中梯度经过多层后指数级衰减（如Sigmoid导数最大0.25，10层后衰减到约$10^{-6}$），导致前面层的参数学不动。**梯度爆炸**：权重矩阵特征值大于1时梯度指数级增长。解决方案包括：使用ReLU激活函数、合理的权重初始化（Xavier/He）、Batch Normalization、残差连接、梯度裁剪。
-
-→ [反向传播算法](articles/ai/反向传播算法.md)
-</details>
-
-<details>
-<summary><b>Q: SGD、Momentum和Adam优化器有什么区别？</b></summary>
-
-**SGD**：用当前梯度更新参数，简单但可能震荡。**Momentum**：累积历史梯度方向（$v_t = \beta v_{t-1} + \nabla L$），在持续方向上加速、震荡方向上抵消。**Adam**：结合Momentum（一阶矩）和自适应学习率（二阶矩），为每个参数自动调节学习率。Adam是通用默认选择，训练Transformer通常使用AdamW。
-
-→ [反向传播算法](articles/ai/反向传播算法.md)
-</details>
-
-### Transformer
-
-<details>
-<summary><b>Q: Transformer的自注意力机制是如何工作的？</b></summary>
-
-自注意力通过**Query、Key、Value**三个向量计算：每个token生成Q（我在找什么）、K（我能提供什么）、V（我的内容）。通过 $\text{Attention}(Q,K,V) = \text{softmax}(\frac{QK^T}{\sqrt{d_k}})V$ 计算注意力权重，让每个token直接关注序列中所有其他token，一步获取全局信息。除以 $\sqrt{d_k}$ 是为了防止点积过大导致Softmax输出极端化。
-
-→ [Transformer架构原理](articles/ai/Transformer架构原理.md)
-</details>
-
-<details>
-<summary><b>Q: 为什么需要多头注意力？Transformer Block的完整结构是什么？</b></summary>
-
-单个注意力头只能学一种关注模式，**多头注意力**并行运行多个头，分别学习语法关系、指代关系、修饰关系等不同模式。一个完整的Transformer Block = Layer Norm → Multi-Head Self-Attention → 残差连接 → Layer Norm → FFN → 残差连接。残差连接让梯度跳层传播，使训练深层网络成为可能。
-
-→ [Transformer架构原理](articles/ai/Transformer架构原理.md)
-</details>
-
-<details>
-<summary><b>Q: GPT是如何生成文本的？什么是KV Cache？</b></summary>
-
-GPT使用Decoder-Only架构，训练目标是预测下一个token。生成时采用自回归方式：每步预测一个token，添加到序列末尾后再预测下一个。**KV Cache**缓存已计算的Key和Value向量，避免重复计算，将每步复杂度从 $O(t^2)$ 降为 $O(t)$。温度参数控制生成的随机性，Top-p采样平衡多样性与质量。
-
-→ [Transformer架构原理](articles/ai/Transformer架构原理.md)
-</details>
-
-### RAG
-
-<details>
-<summary><b>Q: 什么是RAG？它解决了大语言模型的什么问题？</b></summary>
-
-**RAG（检索增强生成）**在LLM回答前先从外部知识库检索相关信息，将其作为上下文放入Prompt中。它解决了LLM的三个核心问题：知识过时（训练数据有截止日期）、幻觉（编造不存在的信息）、缺乏私有知识（无法访问企业内部数据）。核心流程是：检索（Retrieve）→ 增强（Augment）→ 生成（Generate）。
-
-→ [RAG](articles/ai/RAG.md)
-</details>
-
-<details>
-<summary><b>Q: RAG的检索阶段如何工作？向量检索与关键词检索有什么区别？</b></summary>
-
-**关键词检索**（如BM25）基于词频匹配，无法理解语义（"提升性能"匹配不到"优化效率"）。**向量检索**使用嵌入模型将文本转为高维向量，语义相近的文本向量距离近，通过余弦相似度衡量相关性。实践中常用**混合检索**，结合两者优势，并通过重排序模型进一步优化结果。
-
-→ [RAG](articles/ai/RAG.md)
-</details>
-
-<details>
-<summary><b>Q: RAG有哪些高级优化技术？</b></summary>
-
-**查询优化**：查询重写（让LLM改写问题使其更适合检索）、查询分解（拆解复杂问题为子问题）、HyDE（用假设答案检索）。**检索优化**：混合检索（关键词+向量）、重排序（Cross-Encoder精排）、层级索引、父文档检索。**生成优化**：引用标注（标注来源）、自我反思（检查回答是否有依据）。还有Agentic RAG（Agent自主决定何时检索）和Graph RAG（知识图谱增强）等演进方向。
-
-→ [RAG](articles/ai/RAG.md)
-</details>
-
-### Prompt Engineering
-
-<details>
-<summary><b>Q: 什么是Prompt Engineering？有哪些核心技术？</b></summary>
-
-**Prompt Engineering**是研究如何有效地与LLM沟通的技术。核心技术包括：**Zero-Shot**（直接给指令）、**Few-Shot**（通过示例教模型）、**Chain of Thought**（引导模型逐步推理）、**ReAct**（推理+行动交替，Agent的基础）、**Self-Consistency**（多次采样取多数票）、**Tree of Thought**（树状搜索推理路径）。一个好的Prompt通常包含角色、上下文、指令、示例、格式要求和约束。
-
-→ [Prompt Engineering](articles/ai/Prompt%20Engineering.md)
-</details>
-
-<details>
-<summary><b>Q: Few-Shot和Chain of Thought分别在什么场景下使用？</b></summary>
-
-**Few-Shot**适用于需要模型遵循特定格式或模式的任务（分类、信息提取、格式转换等），通过3~5个示例让模型"学会"期望的输入输出格式。**Chain of Thought**适用于推理类任务（数学计算、逻辑推理、多步决策），通过"让我们一步步思考"引导模型展示推理过程，显著提升推理准确率。两者可以组合使用：用Few-Shot展示带推理步骤的示例。
-
-→ [Prompt Engineering](articles/ai/Prompt%20Engineering.md)
-</details>
-
-### AI Agent
-
-<details>
-<summary><b>Q: 什么是AI Agent？它与普通的LLM对话有什么区别？</b></summary>
-
-**AI Agent**是以LLM为"大脑"的自主系统，具备感知、规划、行动、观察、反思五种能力。与普通LLM对话的关键区别：Agent能**调用外部工具**（搜索、执行代码、操作API）、有**记忆系统**（短期对话上下文+长期知识存储）、能**自主规划**（将复杂任务分解为步骤并逐步执行）、能**自我修正**（发现错误时回退重试）。典型推理模式包括ReAct（推理+行动交替）和Plan-and-Execute（先规划后执行）。
-
-→ [AI Agent](articles/ai/AI%20Agent.md)
-</details>
-
-<details>
-<summary><b>Q: Multi-Agent系统是什么？Agent有哪些关键挑战？</b></summary>
-
-**Multi-Agent**是多个Agent协作完成复杂任务的系统，协作模式包括：顺序管道（A输出给B）、监督者模式（主Agent调度专家Agent）、辩论模式（多Agent讨论达成共识）。关键挑战：**幻觉传播**（10步推理正确率仅约60%）、**上下文溢出**（工具调用结果撑满上下文窗口）、**成本**（复杂任务可能消耗单次调用20~100倍Token）、**安全性**（Agent能执行真实操作，需最小权限+操作确认+沙箱执行）。
-
-→ [AI Agent](articles/ai/AI%20Agent.md)
-</details>
-
-### Function Calling与MCP
-
-<details>
-<summary><b>Q: Function Calling和MCP的区别是什么？</b></summary>
-
-**Function Calling**是LLM提供商在模型层面支持的工具调用能力——开发者定义函数签名，LLM决定调用哪个函数和传什么参数，应用程序负责执行。**MCP（Model Context Protocol）**是Anthropic提出的开放协议标准——工具封装为独立的MCP Server，任何支持MCP的应用都能即插即用。核心区别：Function Calling解决"LLM怎么决定调工具"（模型层），MCP解决"工具怎么被标准化发现和使用"（协议层）。两者在实际架构中经常配合使用。
-
-→ [Function Calling与MCP](articles/ai/Function%20Calling与MCP.md)
-</details>
-
-<details>
-<summary><b>Q: MCP的架构是什么？它提供哪些能力？</b></summary>
-
-MCP采用Client-Server架构：**Host**（宿主应用如Cursor）内嵌**MCP Client**，通过JSON-RPC协议与独立的**MCP Server**通信。MCP Server提供三种能力：**Tools**（可执行的操作，如创建GitHub Issue）、**Resources**（只读数据源，如读取仓库README）、**Prompts**（预定义的提示词模板）。传输方式支持stdio（本地进程通信）和HTTP+SSE（远程服务）。MCP将M x N的工具集成问题简化为M + N。
-
-→ [Function Calling与MCP](articles/ai/Function%20Calling与MCP.md)
-</details>
-
-### AI编程工具
-
-<details>
-<summary><b>Q: Cursor中的Rule和Skill有什么区别？</b></summary>
-
-**Rule**是项目级别的持久规范，自动注入每次交互中（如"用Swift""遵循MVVM""用中文回答"），内容简短，通过`.cursor/rules/`目录配置，可按文件类型自动激活。**Skill**是可复用的操作流程知识模块（如"如何创建新页面模块"的完整步骤），内容详尽，按需触发。Rule告诉AI"你应该遵守什么规范"，Skill告诉AI"你应该按什么流程做事"。两者配合MCP（提供工具能力）共同构成AI编程工具的定制化体系。
-
-→ [AI编程工具](articles/ai/AI编程工具.md)
-</details>
-
-<details>
-<summary><b>Q: 如何高效使用AI编程工具？有什么最佳实践？</b></summary>
-
-按场景选择交互方式：Tab补全适合行内补全、Inline Edit (Cmd+K)适合修改已有代码、Chat适合实现新功能、Agent模式适合跨文件重构。给好指令的原则：提供参考（指向项目中类似代码）、明确约束（API路径、返回类型）、说明上下文（在哪个文件操作）、使用@引用精确指向文件和符号。最有效的人机协作模式：人类负责架构决策和代码审查，AI负责代码生成和重复劳动。
-
-→ [AI编程工具](articles/ai/AI编程工具.md)
-</details>
-
----
 
 ## 贡献指南
 
