@@ -1,7 +1,5 @@
 # NSNotificationCenter底层原理
 
-[toc]
-
 NSNotificationCenter 是 Foundation 提供的进程内消息广播机制，对象可以向通知中心注册自己感兴趣的通知，当其他对象发布匹配的通知时，通知中心会把消息分发给所有观察者。
 
 它本质上是一种发布-订阅模式，也可以看作观察者模式的一种实现：
