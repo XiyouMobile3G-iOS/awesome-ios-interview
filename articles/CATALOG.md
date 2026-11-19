@@ -29,6 +29,7 @@
 | [weak详解](ios-basics/weak详解.md)                                     | weak引用的实现原理与使用          |
 | [KVC底层原理](ios-basics/KVC底层原理.md) | KVC键值编码的底层实现原理 |
 | [KVO底层原理](ios-basics/KVO底层原理.md) | KVO键值观察的底层实现原理 |
+| [NSNotificationCenter底层原理](ios-basics/NSNotificationCenter底层原理.md) | 通知中心注册、分发、移除机制与生命周期管理 |
 | [Block底层原理](ios-basics/Block底层原理.md) | Block的底层结构、三种类型、__block原理与循环引用 |
 | [iOS反射](ios-basics/iOS反射.md) | OC Runtime反射与Swift Mirror内省机制 |
 | [iOS中的数据库](ios-basics/iOS中的数据库.md) | iOS数据持久化与数据库方案全景解析 |
@@ -261,3 +262,4 @@
 | [OpenClaw源码导读-Gateway控制平面](ai/openclaw/OpenClaw源码导读-Gateway控制平面.md) | CLI→Gateway六步启动、WebSocket协议帧、六种Auth、Pairing、Session模型 |
 | [OpenClaw源码导读-Agent Harness](ai/openclaw/OpenClaw源码导读-Agent%20Harness.md) | AgentHarness抽象、Harness注册表与选择策略、2160行主循环、40+状态位的失败分类与Compaction |
 | [OpenClaw源码导读-Channels与扩展生态](ai/openclaw/OpenClaw源码导读-Channels与扩展生态.md) | 118个Channel Plugin、Node RPC、A2UI Canvas协议、53个Skill、Docker Sandbox隔离 |
+
