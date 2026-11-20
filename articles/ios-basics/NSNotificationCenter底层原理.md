@@ -1,37 +1,55 @@
 # NSNotificationCenter底层原理
 
-NSNotificationCenter 是 Foundation 提供的进程内消息广播机制，对象可以向通知中心注册自己感兴趣的通知，当其他对象发布匹配的通知时，通知中心会把消息分发给所有观察者。
+NSNotificationCenter 是 Foundation 提供的进程内消息广播机制
+
+观察者可以向通知中心注册自己需要的通知，当其他对象发布匹配的通知时，通知中心会把消息分发给所有观察者。
 
 它本质上是一种发布-订阅模式，也可以看作观察者模式的一种实现：
 
-发布者和观察者不需要互相持有，也不需要知道对方的具体类型，因此可以降低模块之间的耦合。
-
-需要注意，NSNotificationCenter 只负责当前进程内的通信，它不是远程推送，也不是系统通知栏；远程推送和本地通知应使用 UserNotifications 框架。
+发布者和观察者不需要互相持有，也不需要知道对方的具体类型，因此可以降低模块之间的耦合，但同时也会降低代码的可读性
 
 ## 基本使用
+NSNotificationCenter的使用简单来说可以分为添加，发出，和移除
 
+添加通知观察者
 ~~~objc
-// 添加通知观察者
+// selector 方式：通知触发时向 observer 发送 aSelector 消息
+// aName 为 nil 时匹配所有通知名；anObject 为 nil 时匹配所有发送者
 - (void)addObserver:(id)observer selector:(SEL)aSelector name:(nullable NSNotificationName)aName object:(nullable id)anObject;
-- (id <NSObject>)addObserverForName:(nullable NSNotificationName)name object:(nullable id)obj queue:(nullable NSOperationQueue *)queue usingBlock:(void (^)(NSNotification *note))block;
 
-// 发出通知
+// block 方式：通知触发时在 queue 指定的队列执行 block
+// queue 为 nil 时在发送通知的线程同步执行；返回值为 token，需持有并在合适时机移除
+- (id <NSObject>)addObserverForName:(nullable NSNotificationName)name object:(nullable id)obj queue:(nullable NSOperationQueue *)queue usingBlock:(void (^)(NSNotification *note))block;
+~~~
+
+作为发布者发出通知
+~~~objc
+// 发送已构造好的 NSNotification 对象
 - (void)postNotification:(NSNotification *)notification;
+
+// 发送指定名称的通知，object 为发送者，userInfo 为附加信息（可省略）
 - (void)postNotificationName:(NSNotificationName)aName object:(nullable id)anObject;
 - (void)postNotificationName:(NSNotificationName)aName object:(nullable id)anObject userInfo:(nullable NSDictionary *)aUserInfo;
+~~~
 
-// 移除通知观察者
+移除观察者
+~~~objc
+// 移除该 observer 注册的所有通知
 - (void)removeObserver:(id)observer;
+
+// 精确移除：只移除 observer 中与 aName、anObject 匹配的那条注册关系
+// aName / anObject 传 nil 表示不限制，相当于通配
 - (void)removeObserver:(id)observer name:(nullable NSNotificationName)aName object:(nullable id)anObject;
 ~~~
 
-这其中主要涉及以下两种类
+这其中主要涉及以下两种类，`NSNotification`和`NSNotificationCenter`接下来会分别讲到
 
-- `NSNotificationCenter` 用来管理通知的单例类，将观察者注册到 `NSNotificatinonCenter` 的通知调度表中，然后发送通知时利用标识符 `name` 和 `object` 识别出调度表中的观察者，然后调用相应的观察者的方法
+## NSNotification对象
 
-- `NSNotification` 是方便 `NSNotificationCenter` 广播到其他对象时的封装对象，简单讲即通知中心对通知调度表中的对象广播时发送 `NSNotification` 对象
+`NSNotification` 是方便 `NSNotificationCenter` 广播到其他对象时的封装对象
+简单讲即，通知中心对通知调度表中的对象广播时，会发送 `NSNotification` 对象
 
-## NSNotification 的底层原理
+内部包含有通知的名称，来源，以及附加的信息，通过一个方法来进行初始化
 
 ```objc
 @interface NSNotification : NSObject <NSCopying, NSCoding>
@@ -42,6 +60,7 @@ NSNotificationCenter 是 Foundation 提供的进程内消息广播机制，对�
 
 // NSNotification 指定初始化方法
 - (instancetype)initWithName:(NSNotificationName)name object:(nullable id)object userInfo:(nullable NSDictionary *)userInfo API_AVAILABLE(macos(10.6), ios(4.0), watchos(2.0), tvos(9.0)) NS_DESIGNATED_INITIALIZER;
+  
 - (nullable instancetype)initWithCoder:(NSCoder *)coder NS_DESIGNATED_INITIALIZER;
 
 @end
@@ -64,12 +83,17 @@ NSNotificationCenter 是 Foundation 提供的进程内消息广播机制，对�
 
 ## NSNotificationCenter 的底层实现原理
 
-Apple 没有公开 Foundation 中 `NSNotificationCenter` 的完整源码，因此无法直接断言 Apple 内部使用了某个具体的数据结构；下面的分析基于公开 API 行为、GNUstep 的参考实现以及通知中心的基本工作流程。
+
+`NSNotificationCenter` 用来管理通知的单例类。将观察者注册到 `NSNotificatinonCenter` 的通知调度表中，然后发送通知时利用标识符 `name` 和 `object` 识别出调度表中的观察者，调用相应的观察者的方法
+
+
+Apple 没有公开 Foundation 中 `NSNotificationCenter` 的完整源码，因此无法了解学习 Apple 内部使用了某个具体的数据结构；
+下面的分析基于公开 API 行为、GNUstep 的参考实现
 
 整体上，通知中心需要完成三件事：
 
-1. 保存观察者信息
-2. 根据 name 和 object 找到匹配的观察者
+1. 根据 name 和 object 找到匹配的观察者
+2. 保存观察者信息
 3. 调用观察者的 selector 或 block
 
 通知中心定义了两个结构体来存储通知信息和观察者信息：
@@ -79,6 +103,8 @@ Apple 没有公开 Foundation 中 `NSNotificationCenter` 的完整源码，因�
 ```objc
 typedef struct NCTbl {
   Observation       *wildcard;  // 链表结构，保存既没有 name 也没有 object 的通知
+  // GSIMapTable是一个基于C实现的通用哈希表，使用拉链法，在GNUstep中被广泛使用
+  // 该数据结构为GNUstep中专用的，并不是官方实现
   GSIMapTable       nameless;   // 存储无 name 、有 object 的通知
   GSIMapTable       named;      // 存储有 name 的通知，不限制 object
   // ...
@@ -96,6 +122,7 @@ typedef struct Obs {
     // ...
 } Observation;
 ```
+
 
 这里的存储结构主要涉及三张表：named 表，nameless 表，wildcard 表
 
@@ -524,7 +551,11 @@ Swift 现在有两种使用方式：
 - 传统 API：`NotificationCenter` 是 OC 通知中心在 Swift 中的对应接口，仍然使用 `name / object / userInfo`，监听、发送和移除的思路与 OC 一样
 - 新 API（iOS 26+）：用明确的消息类型和属性代替 `userInfo` 字典，减少拼写和类型转换错误；`MainActorMessage` 在主 actor 上同步传递，`AsyncMessage` 异步传递并支持并发安全。新 `ObservationToken` 释放后会自动取消监听，和传统 block token 的规则不同
 
-## 面试题：NSNotificationCenter 的底层原理是什么？
+## 面试题
+
+### NSNotificationCenter 的底层原理是什么？
+
+观察关系如何存储？`name`、`observer` 和 `SEL` 之间是什么关系？
 
 NSNotificationCenter 本质上是一个进程内的观察者管理和消息分发机制
 
@@ -536,4 +567,26 @@ NSNotificationCenter 本质上是一个进程内的观察者管理和消息分�
 6. selector 和 block 观察者的生命周期管理方式不同，block observer 必须保存并移除返回的 token
 
 需要注意，Apple 没有公开 Foundation 的完整实现，因此 NCTable、named、nameless、wildCards 等结构主要来自 GNUstep 参考实现和行为推导，不能直接声称它们就是 Apple 内部源码。
+
+### 自测题
+
+- 通知是同步发送的，还是异步发送的？
+- `NSNotificationCenter` 的通知发布和观察者回调在同一个线程吗？如何异步发送通知？
+- `NSNotificationQueue` 是同步还是异步发送通知？观察者在哪个线程回调？
+- `NSNotificationQueue` 和 `RunLoop` 有什么关系？
+- 如何保证观察者在主线程收到通知？
+- 页面销毁时不移除观察者，会崩溃吗？
+- 多次注册同一个通知会怎样？多次移除呢？
+- 下面的代码能收到通知吗？为什么？
+
+  ```objc
+  // 发送通知
+  [[NSNotificationCenter defaultCenter] postNotificationName:@"TestNotification" object:nil];
+  // 注册观察者
+  [NSNotificationCenter.defaultCenter addObserver:self
+                                         selector:@selector(handleNotification:)
+                                             name:@"TestNotification"
+                                           object:@1];
+  ```
+
 
